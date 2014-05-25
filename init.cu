@@ -15,8 +15,8 @@ LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
 int luaopen_libcunnx(lua_State *L)
 {
   lua_newtable(L);
-
-  cunn_SoftMaxTree_init(L);
+  
+  cunnx_SoftMaxTree_init(L);
 
   return 1;
 }
