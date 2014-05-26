@@ -1,24 +1,100 @@
 #define MINUS_LOG_THRESHOLD -18.42
 #define SOFTMAXTREE_THREADS 128
 
+struct addvalue_functor
+{
+  const float value;
+
+  addvalue_functor(float value_) : value(value_) {}
+
+    __host__ __device__ float operator()(const float& x) const
+  {
+    return (x+value);
+  }
+};
+
+__global__ void cunn_LogSoftMax_updateOutput_kernel(float *output, float *input, int nframe, int dim)
+{
+  __shared__ float buffer[LOGSOFTMAX_THREADS+1];
+  int k = blockIdx.x;
+  float *input_k = input + k*dim;
+  float *output_k = output + k*dim;
+
+  int i_start = threadIdx.x;
+  int i_end = dim;
+  int i_step = blockDim.x;
+
+  // max?
+  buffer[threadIdx.x] = -FLT_MAX;
+  for (int i=i_start; i<i_end; i+=i_step)
+  {
+    float z = input_k[i];
+    if(buffer[threadIdx.x] < z)
+      buffer[threadIdx.x] = z;
+  }
+
+  __syncthreads();
+
+  // reduce
+  if (threadIdx.x == 0)
+  {
+    float max_k = -FLT_MAX;
+    for (int i=0; i<blockDim.x; i++)
+    {
+      if(max_k < buffer[i])
+        max_k = buffer[i];
+    }
+    buffer[LOGSOFTMAX_THREADS] = max_k;
+  }
+
+  __syncthreads();
+
+  // logadd?
+  float max_k = buffer[LOGSOFTMAX_THREADS];
+  buffer[threadIdx.x] = 0;
+  for (int i=i_start; i<i_end; i+=i_step)
+    buffer[threadIdx.x] += __expf(input_k[i]-max_k);
+
+  __syncthreads();
+
+  // reduce
+  if (threadIdx.x == 0)
+  {
+    float logsum_k = 0;
+    for (int i=0; i<blockDim.x; i++)
+      logsum_k += buffer[i];
+    buffer[LOGSOFTMAX_THREADS] = max_k + __logf(logsum_k);
+  }
+
+  __syncthreads();
+
+  // logsoftmax
+  float logsum_k = buffer[LOGSOFTMAX_THREADS];
+  for (int i=i_start; i<i_end; i+=i_step)
+    output_k[i] = input_k[i] - logsum_k;
+}
+
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float *input, float* weight, float* bias, 
   int* target, int* childParent, int* parentChildren, 
   int nInput, int rootId)
 {
-  __shared__ float input_buffer[nInput]; // constant might be faster
-  __shared__ float result_buffer[nInput];
+  //__shared__ float input_buffer[nInput]; // constant might be faster
+  __shared__ float buffer[SOFTMAXTREE_THREADS+1];
+  int i_start = threadIdx.x;
+  int i_end = dim;
+  int i_step = blockDim.x;
   int k = blockIdx.x;
-  int i = threadIdx.x;
-  float *input_k = input + k*dim;
-  float *output_k = output + k*dim;
+  float *input_k = input + k*nInput;
+  float *output_k = output + k*nInput;
   int childId = (*(target+k)) - 1;
   int parentId, parentIdx, childIdx, nChildren;
+  int nOutput;
   int *node;
   int n = 0;
   
-  // copy input into buffer
-  input_buffer[i] = input_k[i];
+  // zero buffer
+  buffer[i] = 0;
   
   __syncthreads();
 
@@ -43,36 +119,78 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     // addmv (dot products)
     for (int j=0; j<nChildren; j++)
     {
-      partialSum[i] = input_buffer[i]*nodeWeight[i*nInput + j];
+      for (int i=i_start; i<nInput; i+=i_step)
+      {
+        buffer[i_start] += input_k[i]*nodeWeight[i*nInput + j];
+      }
       for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
       {
         __syncthreads();
-        if (i < stride)
-          partialSum[i] += partialSum[i+stride];
+        if (i_start < stride)
+          buffer[i_start] += buffer[i_start+stride];
       }
-      if (i == 0) 
-        *nodeOutput = partialSum[i] + nodeBias[j];
+      if (i_start == 0) 
+        *nodeOutput = buffer[0] + nodeBias[j];
     }
     
+    __syncthreads();
+    
     /* LogSoftMax */
-    THTensor_(set)(nodeInter, nodeOutput);
-    THTensor_(narrow)(nodeOutput, logsoftOutput, 0, n, nChildren);
+    nodeInter = nodeOutput;
+    nodeOutput = logsoftOutput + n;
     
-    input_data = THTensor_(data)(nodeInter);
-    output_data = THTensor_(data)(nodeOutput);
-    
-    accreal logsum = 0;
-    real maxInput = -THInf;
-    
-    for(d = 0; d < nChildren; d++)
-      maxInput = THMax(maxInput, input_data[d]);
+    // max?
+    buffer[i_start] = -FLT_MAX;
+    for (int i=i_start; i<nChildren; i+=i_step)
+    {
+      float z = nodeInder[i];
+      if(buffer[i_start] < z)
+        buffer[i_start] = z;
+    }
 
-    for(d = 0; d < nChildren; d++)
-      logsum += THExpMinusApprox(maxInput-input_data[d]);
-    logsum = maxInput + log(logsum);
+    __syncthreads();
+    
+    
+    // reduce
+    nOutput = blockDim.x
+    if (nChildren < nOutput)
+      nOutput = nChildren;
+    if (i_start == 0)
+    {
+      float max_k = -FLT_MAX;
+      for (int i=0; i<nOutput; i++)
+      {
+        if(max_k < buffer[i])
+          max_k = buffer[i];
+      }
+      buffer[SOFTMAXTREE_THREADS] = max_k;
+    }
 
-    for(d = 0; d < nChildren; d++)
-      output_data[d] = input_data[d] - logsum;
+    __syncthreads();
+
+    // logadd?
+    float max_k = buffer[LOGSOFTMAX_THREADS];
+    buffer[threadIdx.x] = 0;
+    for (int i=i_start; i<i_end; i+=i_step)
+      buffer[threadIdx.x] += __expf(input_k[i]-max_k);
+
+    __syncthreads();
+
+    // reduce
+    if (threadIdx.x == 0)
+    {
+      float logsum_k = 0;
+      for (int i=0; i<blockDim.x; i++)
+        logsum_k += buffer[i];
+      buffer[LOGSOFTMAX_THREADS] = max_k + __logf(logsum_k);
+    }
+
+    __syncthreads();
+
+    // logsoftmax
+    float logsum_k = buffer[LOGSOFTMAX_THREADS];
+    for (int i=i_start; i<i_end; i+=i_step)
+      output_k[i] = input_k[i] - logsum_k;
       
     /* Narrow */
     THTensor_(set)(nodeInter, nodeOutput);
