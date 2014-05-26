@@ -3,23 +3,97 @@
 
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float *input, float* weight, float* bias, 
-  int* meta, int nNode, int nInput)
+  int* target, int* childParent, int* parentChildren, 
+  int nInput, int rootId)
 {
-  __shared__ float input_buffer[nInput];
+  __shared__ float input_buffer[nInput]; // constant might be faster
+  __shared__ float result_buffer[nInput];
   int k = blockIdx.x;
+  int i = threadIdx.x;
   float *input_k = input + k*dim;
   float *output_k = output + k*dim;
+  int childId = (*(target+k)) - 1;
+  int parentId, parentIdx, childIdx, nChildren;
+  int *node;
+  int n = 0;
   
   // copy input into buffer
-  for (int i=0; i<nInput ;i++) 
-  {
-    input_buffer[i] = input_k[i];
-  }
+  input_buffer[i] = input_k[i];
+  
+  __syncthreads();
 
+  // loop through nodes
+  while(1)
+  {
+    /* get next Node in Tree */
+    node = childParent + childId*2;
+    parentId = (*node) - 1;
+    childIdx = (*(node+1)) - 1;
+    
+    node = parentChildren + parentId*2;
+    parentIdx = (*node) - 1;
+    nChildren = *(node+1);
+    
+    /* Linear */
+    
+    nodeWeight = weight + parentIdx*nInput;
+    nodeBias = bias + parentIdx;
+    nodeOutput = linearOutput + n;
+    
+    // addmv (dot products)
+    for (int j=0; j<nChildren; j++)
+    {
+      partialSum[i] = input_buffer[i]*nodeWeight[i*nInput + j];
+      for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+      {
+        __syncthreads();
+        if (i < stride)
+          partialSum[i] += partialSum[i+stride];
+      }
+      if (i == 0) 
+        *nodeOutput = partialSum[i] + nodeBias[j];
+    }
+    
+    /* LogSoftMax */
+    THTensor_(set)(nodeInter, nodeOutput);
+    THTensor_(narrow)(nodeOutput, logsoftOutput, 0, n, nChildren);
+    
+    input_data = THTensor_(data)(nodeInter);
+    output_data = THTensor_(data)(nodeOutput);
+    
+    accreal logsum = 0;
+    real maxInput = -THInf;
+    
+    for(d = 0; d < nChildren; d++)
+      maxInput = THMax(maxInput, input_data[d]);
+
+    for(d = 0; d < nChildren; d++)
+      logsum += THExpMinusApprox(maxInput-input_data[d]);
+    logsum = maxInput + log(logsum);
+
+    for(d = 0; d < nChildren; d++)
+      output_data[d] = input_data[d] - logsum;
+      
+    /* Narrow */
+    THTensor_(set)(nodeInter, nodeOutput);
+    THTensor_(narrow)(nodeOutput, nodeInter, 0, childIdx, 1); 
+    
+    /* CAddTable (without log, would have been CMulTable) */
+    narrowsum += THTensor_(get1d)(nodeOutput, 0);
+    
+    n += nChildren;
+    /* Break when root is reached */
+    if (parentId == rootId) 
+    {
+      break;
+    }
+    childId = parentId;
+  }
   
   while (1) 
   {
     float z = input_k[i];
+    float *nodeWeight = weight+
     if(buffer[threadIdx.x] < z)
       buffer[threadIdx.x] = z;
   }
