@@ -1,81 +1,10 @@
 #define MINUS_LOG_THRESHOLD -18.42
-#define SOFTMAXTREE_THREADS 128
+#define SOFTMAXTREE_THREADS 32
 
-struct addvalue_functor
-{
-  const float value;
-
-  addvalue_functor(float value_) : value(value_) {}
-
-    __host__ __device__ float operator()(const float& x) const
-  {
-    return (x+value);
-  }
-};
-
-__global__ void cunn_LogSoftMax_updateOutput_kernel(float *output, float *input, int nframe, int dim)
-{
-  __shared__ float buffer[LOGSOFTMAX_THREADS+1];
-  int k = blockIdx.x;
-  float *input_k = input + k*dim;
-  float *output_k = output + k*dim;
-
-  int i_start = threadIdx.x;
-  int i_end = dim;
-  int i_step = blockDim.x;
-
-  // max?
-  buffer[threadIdx.x] = -FLT_MAX;
-  for (int i=i_start; i<i_end; i+=i_step)
-  {
-    float z = input_k[i];
-    if(buffer[threadIdx.x] < z)
-      buffer[threadIdx.x] = z;
-  }
-
-  __syncthreads();
-
-  // reduce
-  if (threadIdx.x == 0)
-  {
-    float max_k = -FLT_MAX;
-    for (int i=0; i<blockDim.x; i++)
-    {
-      if(max_k < buffer[i])
-        max_k = buffer[i];
-    }
-    buffer[LOGSOFTMAX_THREADS] = max_k;
-  }
-
-  __syncthreads();
-
-  // logadd?
-  float max_k = buffer[LOGSOFTMAX_THREADS];
-  buffer[threadIdx.x] = 0;
-  for (int i=i_start; i<i_end; i+=i_step)
-    buffer[threadIdx.x] += __expf(input_k[i]-max_k);
-
-  __syncthreads();
-
-  // reduce
-  if (threadIdx.x == 0)
-  {
-    float logsum_k = 0;
-    for (int i=0; i<blockDim.x; i++)
-      logsum_k += buffer[i];
-    buffer[LOGSOFTMAX_THREADS] = max_k + __logf(logsum_k);
-  }
-
-  __syncthreads();
-
-  // logsoftmax
-  float logsum_k = buffer[LOGSOFTMAX_THREADS];
-  for (int i=i_start; i<i_end; i+=i_step)
-    output_k[i] = input_k[i] - logsum_k;
-}
 
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
-  float *output, float *input, float* weight, float* bias, 
+  float *output, float* linearoutput, float* logsoftoutput, 
+  float *input, float* weight, float* bias, 
   int* target, int* childParent, int* parentChildren, 
   int nInput, int rootId)
 {
@@ -86,7 +15,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   int i_step = blockDim.x;
   int k = blockIdx.x;
   float *input_k = input + k*nInput;
-  float *output_k = output + k*nInput;
+  float narrowsum = 0;
   int childId = (*(target+k)) - 1;
   int parentId, parentIdx, childIdx, nChildren;
   int nOutput;
@@ -169,35 +98,31 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     __syncthreads();
 
     // logadd?
-    float max_k = buffer[LOGSOFTMAX_THREADS];
-    buffer[threadIdx.x] = 0;
-    for (int i=i_start; i<i_end; i+=i_step)
-      buffer[threadIdx.x] += __expf(input_k[i]-max_k);
+    float max_k = buffer[SOFTMAXTREE_THREADS];
+    buffer[i_start] = 0;
+    for (int i=i_start; i<nOutput; i+=i_step)
+      buffer[i_start] += __expf(nodeInter[i]-max_k);
 
     __syncthreads();
 
     // reduce
-    if (threadIdx.x == 0)
+    if (i_start == 0)
     {
       float logsum_k = 0;
-      for (int i=0; i<blockDim.x; i++)
+      for (int i=0; i<nOutput; i++)
         logsum_k += buffer[i];
-      buffer[LOGSOFTMAX_THREADS] = max_k + __logf(logsum_k);
+      buffer[SOFTMAXTREE_THREADS] = max_k + __logf(logsum_k);
     }
 
     __syncthreads();
 
     // logsoftmax
-    float logsum_k = buffer[LOGSOFTMAX_THREADS];
-    for (int i=i_start; i<i_end; i+=i_step)
-      output_k[i] = input_k[i] - logsum_k;
+    float logsum_k = buffer[SOFTMAXTREE_THREADS];
+    for (int i=i_start; i<nOutput; i+=i_step)
+      nodeOutput[i] = nodeInter[i] - logsum_k;
       
-    /* Narrow */
-    THTensor_(set)(nodeInter, nodeOutput);
-    THTensor_(narrow)(nodeOutput, nodeInter, 0, childIdx, 1); 
-    
-    /* CAddTable (without log, would have been CMulTable) */
-    narrowsum += THTensor_(get1d)(nodeOutput, 0);
+    /* Narrow + CAddTable (without log, would have been CMulTable) */
+    narrowsum += nodeOutput[childIdx]
     
     n += nChildren;
     /* Break when root is reached */
@@ -207,15 +132,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     }
     childId = parentId;
   }
-  
-  while (1) 
-  {
-    float z = input_k[i];
-    float *nodeWeight = weight+
-    if(buffer[threadIdx.x] < z)
-      buffer[threadIdx.x] = z;
-  }
-
+  *output_k = narrowsum;
 }
 
 static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
@@ -228,13 +145,8 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   THIntTensor *childParent = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "childParent", "torch.IntTensor");
   THIntTensor *parentChildren = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "parentChildren", "torch.IntTensor");
   
-  THCudaTensor *metadata = luaT_getfieldcheckudata(L, 1, "_linearOutput", "torch.CudaTensor");
-  THFloatTensor *buffer = luaT_getfieldcheckudata(L, 1, "_buffer", "torch.FloatTensor");
-  
-  THCudaTensor *
-  THFloatTensor *
-  
-  THCudaTensor *logsoftOutput = luaT_getfieldcheckudata(L, 1, "_logSoftMaxOutput", "torch.CudaTensor");
+  THCudaTensor *linearOutput = luaT_getfieldcheckudata(L, 1, "_linearOutput", "torch.CudaTensor");
+  THCudaTensor *logsoftOutput = luaT_getfieldcheckudata(L, 1, "_logsoftmaxOutput", "torch.CudaTensor");
   
   THCudaTensor *weight = luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   THCudaTensor *bias = luaT_getfieldcheckudata(L, 1, "bias", "torch.CudaTensor");
@@ -278,116 +190,23 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
       childId = parentId;
     }
   }
+  THIntTensor_free(node);
+  
   // we use these to keep intermediate results for later backprop
-  THFloatTensor_resize2d(buffer, m, 5);
-  THCudaTensor_resize2d(metadata, m, 5);
+  THCudaTensor_resize2d(linearOutput, n);
   THCudaTensor_resize1d(logsoftOutput, n);
   
-  n, m = 0;
-  /* Fill node metadata buffer */
-  for(i = 0; i < input->size[0]; i++)
-  {
-    long childId = (long)(THIntTensor_get1d(target, i)) - 1;
-    while(1)
-    {
-      long parentId, parentIdx, childIdx, nChildren;
-      /* get next Node in Tree */
-      THIntTensor_select(node, childParent, 0, childId);
-      parentId = (long)(THIntTensor_get1d(node, 0)) - 1;
-      childIdx = (long)(THIntTensor_get1d(node, 1)) - 1;
-      
-      THIntTensor_select(node, parentChildren, 0, parentId);
-      parentIdx = (long)(THIntTensor_get1d(node, 0)) - 1;
-      nChildren = (long)(THIntTensor_get1d(node, 1));
-      
-      THFloatTensor_set2d(buffer, (float)parentId, m, 0);
-      THFloatTensor_set2d(buffer, (float)childIdx, m, 1);
-      THFloatTensor_set2d(buffer, (float)parentIdx, m, 2);
-      THFloatTensor_set2d(buffer, (float)nChildren, m, 3);
-      THFloatTensor_set2d(buffer, (float)i, m, 4);
-      
-      n += nChildren;
-      m += 1;
-      /* Break when root is reached */
-      if (parentId == rootId) 
-      {
-        break;
-      }
-      childId = parentId;
-    }
-  }
   
-  THTensor_copy(metadata, buffer);
-  
-  /* matrix multiplies */
+  /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
-  dim3 threads(SOFTMAXTREE_THREADS); // each thread is an input index
+  dim3 threads(SOFTMAXTREE_THREADS);
   cunnx_SoftMaxTree_updateOutput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(output), THCudaTensor_data(logsoftOutput), 
-    THCudaTensor_data(input), THCudaTensor_data(weight), 
-    THCudaTensor_data(bias), THCudaTensor_data(metadata), 
-    input->size[0], input->size[1]
+    THCudaTensor_data(output), THCudaTensor_data(linearOutput), 
+    THCudaTensor_data(logsoftOutput), THCudaTensor_data(input), 
+    THCudaTensor_data(weight), THCudaTensor_data(bias), 
+    THCudaTensor_data(target), THCudaTensor_data(childParent), 
+    THCudaTensor_data(parentChildren), input->size[1], root_id
   );
-
-  
-  /* logsoftmax */
-  
- 
-      
-      // we use these to keep intermediate results for later backprop
-      THTensor_(resize1d)(linearOutput, n+nChildren);
-      THTensor_(resize1d)(logsoftOutput, n+nChildren);
-  
-      /* Linear */
-      THTensor_(narrow)(nodeWeight, weight, 0, parentIdx, nChildren);
-      THTensor_(narrow)(nodeBias, bias, 0, parentIdx, nChildren);
-      THTensor_(narrow)(nodeOutput, linearOutput, 0, n, nChildren);
-      
-      THTensor_(addmv)(nodeOutput, 1, nodeBias, 1, nodeWeight, nodeInput);
-      
-      /* LogSoftMax */
-      THTensor_(set)(nodeInter, nodeOutput);
-      THTensor_(narrow)(nodeOutput, logsoftOutput, 0, n, nChildren);
-      
-      input_data = THTensor_(data)(nodeInter);
-      output_data = THTensor_(data)(nodeOutput);
-      
-      accreal logsum = 0;
-      real maxInput = -THInf;
-      
-      for(d = 0; d < nChildren; d++)
-        maxInput = THMax(maxInput, input_data[d]);
-
-      for(d = 0; d < nChildren; d++)
-        logsum += THExpMinusApprox(maxInput-input_data[d]);
-      logsum = maxInput + log(logsum);
-
-      for(d = 0; d < nChildren; d++)
-        output_data[d] = input_data[d] - logsum;
-        
-      /* Narrow */
-      THTensor_(set)(nodeInter, nodeOutput);
-      THTensor_(narrow)(nodeOutput, nodeInter, 0, childIdx, 1); 
-      
-      /* CAddTable (without log, would have been CMulTable) */
-      narrowsum += THTensor_(get1d)(nodeOutput, 0);
-      n += nChildren;
-      /* Break when root is reached */
-      if (parentId == rootId) 
-      {
-        break;
-      }
-      childId = parentId;
-    }
-    THTensor_(set1d)(output, i, narrowsum);  
-  }
-  
-  THIntTensor_free(node);
-  THTensor_(free)(nodeWeight);
-  THTensor_(free)(nodeBias);
-  THTensor_(free)(nodeOutput);
-  THTensor_(free)(nodeInput);
-  THTensor_(free)(nodeInter);
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
