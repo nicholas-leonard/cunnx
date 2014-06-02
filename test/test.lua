@@ -6,7 +6,7 @@ require 'cunnx'
 local cunnxtest = {}
 local precision_forward = 1e-4
 local precision_backward = 1e-2
-local nloop = 1000
+local nloop = 100
 local times = {}
 local cunntestx = {}
 
@@ -26,50 +26,38 @@ function cunnxtest.SoftMaxTree()
    }
    local smt = nn.SoftMaxTree(100, hierarchy, root_id)
 
-   local tmF = {}
-   local title = string.format('SoftMaxTree forward ')
-   times[title] = tmF
+   local tm = {}
+   local title = string.format('SoftMaxTree forward/backward ')
+   times[title] = tm
    
-   local tmB = {}
-   local title = string.format('SoftMaxTree backward ')
-   times[title] = tmB
-
    local groundtruthF = smt:forward{input, target}
+   local groundtruthB = smt:backward({input, target}, grad)
    local a = torch.Timer()
    for i = 1,nloop do
       groundtruthF = smt:forward{input, target}
-   end
-   tmF.cpu = a:time().real
-   
-   local groundtruthB = smt:backward({input, target}, grad)
-   a:reset()
-   for i = 1,nloop do
       groundtruthB = smt:backward({input, target}, grad)
    end
-   tmB.cpu = a:time().real
-
+   tm.cpu = a:time().real
+   
    input = input:cuda()
    target = target:float():cuda()
+   grad = grad:cuda()
    smt:cuda()
    local rescudaF = smt:forward{input, target}
+   local rescudaB = smt:backward({input, target}, grad)
+   rescudaB:zero()
    a:reset()
    for i = 1,nloop do
       rescudaF = smt:forward{input, target}
-   end
-   cutorch.synchronize()
-   tmF.gpu = a:time().real
-   
-   local rescudaB = smt:backward({input, target}, grad)
-   a:reset()
-   for i = 1,nloop do
       rescudaB = smt:backward({input, target}, grad)
    end
    cutorch.synchronize()
-   tmB.gpu = a:time().real
+   tm.gpu = a:time().real
    
    local error = rescudaF:float() - groundtruthF
    mytester:assertlt(error:abs():max(), precision_forward, 'error on state (forward) ')
-   
+   print(groundtruthB:select(2,1))
+   print(rescudaB:select(2,1))
    error = rescudaB:float() - groundtruthB
    mytester:assertlt(error:abs():max(), precision_backward, 'error on state (backward) ')
 end
