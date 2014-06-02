@@ -26,30 +26,52 @@ function cunnxtest.SoftMaxTree()
    }
    local smt = nn.SoftMaxTree(100, hierarchy, root_id)
 
-   local tm = {}
+   local tmF = {}
    local title = string.format('SoftMaxTree forward ')
-   times[title] = tm
+   times[title] = tmF
+   
+   local tmB = {}
+   local title = string.format('SoftMaxTree backward ')
+   times[title] = tmB
 
-   local groundtruth = smt:forward{input, target}
+   local groundtruthF = smt:forward{input, target}
    local a = torch.Timer()
    for i = 1,nloop do
-      groundtruth = smt:forward{input, target}
+      groundtruthF = smt:forward{input, target}
    end
-   tm.cpu = a:time().real
+   tmF.cpu = a:time().real
+   
+   local groundtruthB = smt:backward({input, target}, grad)
+   a:reset()
+   for i = 1,nloop do
+      groundtruthB = smt:backward({input, target}, grad)
+   end
+   tmB.cpu = a:time().real
 
    input = input:cuda()
    target = target:float():cuda()
    smt:cuda()
-   local rescuda = smt:forward{input, target}
+   local rescudaF = smt:forward{input, target}
    a:reset()
    for i = 1,nloop do
-      rescuda = smt:forward{input, target}
+      rescudaF = smt:forward{input, target}
    end
    cutorch.synchronize()
-   tm.gpu = a:time().real
+   tmF.gpu = a:time().real
    
-   local error = rescuda:float() - groundtruth
+   local rescudaB = smt:backward({input, target}, grad)
+   a:reset()
+   for i = 1,nloop do
+      rescudaB = smt:backward({input, target}, grad)
+   end
+   cutorch.synchronize()
+   tmB.gpu = a:time().real
+   
+   local error = rescudaF:float() - groundtruthF
    mytester:assertlt(error:abs():max(), precision_forward, 'error on state (forward) ')
+   
+   error = rescudaB:float() - groundtruthB
+   mytester:assertlt(error:abs():max(), precision_backward, 'error on state (backward) ')
 end
 
 function nn.testcudax(tests)
