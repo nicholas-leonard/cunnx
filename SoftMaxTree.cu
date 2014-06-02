@@ -1,12 +1,12 @@
 #define MINUS_LOG_THRESHOLD -18.42
 #define SOFTMAXTREE_THREADS 32
-#define SOFTMAXTREE_MAXCHILDREN 10000
+#define SOFTMAXTREE_MAXCHILDREN 100
 
 
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float* logsoftOutput, 
   float *input, float* weight, float* bias, 
-  int* target, int* childParent, int* parentChildren, 
+  float* target, float* childParent, float* parentChildren, 
   int nInput, int rootId)
 {
   //__shared__ float input_buffer[nInput]; // constant might be faster
@@ -21,7 +21,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   int childId = (*(target+k)) - 1;
   int parentId, parentIdx, childIdx, nChildren;
   int nOutput;
-  int *node;
+  float *node;
   int n = 0;
   
   // zero buffer
@@ -34,12 +34,12 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   {
     /* get next Node in Tree */
     node = childParent + childId*2;
-    parentId = (*node) - 1;
-    childIdx = (*(node+1)) - 1;
+    parentId = (int)node[0] - 1;
+    childIdx = (int)node[1] - 1;
     
     node = parentChildren + parentId*2;
-    parentIdx = (*node) - 1;
-    nChildren = *(node+1);
+    parentIdx = (int)node[0] - 1;
+    nChildren = (int)node[1];
     
     /* Linear */
     
@@ -65,67 +65,9 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
         linearOutput[j] = buffer[0] + nodeBias[j];
     }
     
-    __syncthreads();
-    
-    /* LogSoftMax */
-    nodeOutput = logsoftOutput + n;
-    
-    // max?
-    buffer[tx] = -FLT_MAX;
-    for (int i=tx; i<nChildren; i+=i_step)
-    {
-      float z = linearOutput[i];
-      if(buffer[tx] < z)
-        buffer[tx] = z;
-    }
-
-    __syncthreads();
-    
-    
-    // reduce
-    nOutput = blockDim.x;
-    if (nChildren < nOutput)
-      nOutput = nChildren;
     if (tx == 0)
-    {
-      float max_k = -FLT_MAX;
-      for (int i=0; i<nOutput; i++)
-      {
-        if(max_k < buffer[i])
-          max_k = buffer[i];
-      }
-      buffer[SOFTMAXTREE_THREADS] = max_k;
-    }
-
-    __syncthreads();
-
-    // logadd?
-    float max_k = buffer[SOFTMAXTREE_THREADS];
-    buffer[tx] = 0;
-    for (int i=tx; i<nOutput; i+=i_step)
-      buffer[tx] += __expf(linearOutput[i]-max_k);
-
-    __syncthreads();
-
-    // reduce
-    if (tx == 0)
-    {
-      float logsum_k = 0;
-      for (int i=0; i<nOutput; i++)
-        logsum_k += buffer[i];
-      buffer[SOFTMAXTREE_THREADS] = max_k + __logf(logsum_k);
-    }
-
-    __syncthreads();
-
-    // logsoftmax
-    float logsum_k = buffer[SOFTMAXTREE_THREADS];
-    for (int i=tx; i<nOutput; i+=i_step)
-      nodeOutput[i] = linearOutput[i] - logsum_k;
+      output[k] = linearOutput[0];
       
-    /* Narrow + CAddTable (without log, would have been CMulTable) */
-    narrowsum += nodeOutput[childIdx];
-    
     n += nChildren;
     /* Break when root is reached */
     if (parentId == rootId) 
@@ -134,7 +76,8 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     }
     childId = parentId;
   }
-  output[k] = narrowsum;
+  //if (tx == 0)
+  //  output[k] = narrowsum;
 }
 
 static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
@@ -159,21 +102,25 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
   
+  input = THCudaTensor_newContiguous(input);
+  THCudaTensor_resize1d(output, input->size[0]);
+  
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
   dim3 threads(SOFTMAXTREE_THREADS);
   cunnx_SoftMaxTree_updateOutput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(output), THCudaTensor_data(logsoftOutput), 
     THCudaTensor_data(input), THCudaTensor_data(weight), 
-    THCudaTensor_data(bias), (int*)THCudaTensor_data(target), 
-    (int*)THCudaTensor_data(childParent), (int*)THCudaTensor_data(parentChildren), 
+    THCudaTensor_data(bias), THCudaTensor_data(target), 
+    THCudaTensor_data(childParent), THCudaTensor_data(parentChildren), 
     input->size[1], rootId
   );
-  
+  printf("here2 %f\n", THCudaTensor_get1d(logsoftOutput, 0));
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
-
+  
+  printf("here3\n");
   THCudaTensor_free(input);
   return 1;
 }
