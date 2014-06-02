@@ -4,9 +4,8 @@
 
 
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
-  float *output, float* logsoftOutput,
-  float *input, float* weight, float* bias, 
-  float *target, float* childParent, float* parentChildren, 
+  float *output, float *logsoftOutput, float *input, float *weight, 
+  float *bias, float *target, float *childParent, float *parentChildren, 
   int nInput, int rootId, int maxFamilyPath)
 {
   //__shared__ float input_buffer[nInput]; // constant might be faster
@@ -184,8 +183,8 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
 
 
 __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
-  float *gradInput, float* logsoftOutput, float *gradOutput, float* weight,
-  float *target, float* childParent, float* parentChildren, 
+  float *gradInput, float *logsoftOutput, float *gradOutput, float* weight,
+  float *target, float *childParent, float *parentChildren, 
   int nInput, int rootId, int maxFamilyPath)
 {
   //__shared__ float input_buffer[nInput]; // constant might be faster
@@ -300,9 +299,10 @@ static int cunnx_SoftMaxTree_updateGradInput(lua_State *L)
 }
 
 __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
-  float *gradWeight, float *gradBias, float *input, float* linearGradOutput,
-  float *target, float* childParent, float* parentChildren, 
-  float scale, int nInput, int rootId, int maxFamilyPath)
+  float *gradWeight, float *gradBias, float *input, 
+  float *linearGradOutput, float *nodeUpdateCuda, float *target, 
+  float *childParent, float *parentChildren, 
+  int nInput, int rootId, int maxFamilyPath, int maxDept, float scale)
 {
   __shared__ float buffer[SOFTMAXTREE_THREADS+1];
   int tx = threadIdx.x;
@@ -310,11 +310,13 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
   int k = blockIdx.x;
   float *input_k = input + k*nInput;
   float *nodeGradOutput, *nodeGradWeight, *nodeGradBias;
+  // reuse _multiBuffer for keeping track of which node gets gradients
+  float *nodeUpdate = nodeUpdateCuda + maxDept*k; 
   int childId = target[k] - 1;
   int parentId, parentIdx, childIdx, nChildren;
   float *node;
   int n = 0;
-  THIntTensor *node;
+  int m = 0;
   
   // loop through nodes
   while(1)
@@ -331,9 +333,6 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     nodeGradOutput = linearGradOutput + maxFamilyPath*k + n; 
     nodeGradWeight = gradWeight + parentIdx*nInput;
     nodeGradBias = gradBias + parentIdx;
-      
-    THTensor_(addr)(nodeGradWeight, 1, nodeGradWeight, scale, nodeGradOutput, nodeInput);
-    THTensor_(cadd)(nodeGradBias, nodeGradBias, scale, nodeGradOutput);
     
     // addr weights (scalar-products)
     for (int i=tx; i<nInput; i+=i_step)
@@ -355,10 +354,15 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
       nodeGradBias[i] += scale*nodeGrad[i]
     }
     
+    // keep track of which node gets gradients
+    nodeUpdate[m] = (float)parentId;
+    
     n += nChildren;
+    m += 1;
     /* Break when root is reached */
     if (parentId == rootId)
     {
+      nodeUpdate[m+1] = 0; // zero means end of buffer
       break;
     }
     childId = parentId;
@@ -373,11 +377,14 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
+  int maxDept = (int)luaT_getfieldcheckint(L, 1, "maxDept");
   
   THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParent", "torch.CudaTensor");
   THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildren", "torch.CudaTensor");
   
   THCudaTensor *linearGradOutput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_multiBuffer", "torch.CudaTensor");
+  THCudaTensor *nodeUpdateCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_nodeUpdateCuda", "torch.CudaTensor");
+  THIntTensor *nodeUpdateHost = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "_nodeUpdateHost", "torch.IntTensor");
   
   THCudaTensor *gradWeight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradWeight", "torch.CudaTensor");
   THCudaTensor *gradBias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradBias", "torch.CudaTensor");
@@ -393,10 +400,22 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   cunnx_SoftMaxTree_accGradParameters_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradWeight), THCudaTensor_data(Bias), 
     THCudaTensor_data(input), THCudaTensor_data(linearGradOutput), 
-    THCudaTensor_data(target), THCudaTensor_data(childParent), 
-    THCudaTensor_data(parentChildren), 
-    input->size[1], rootId, maxFamilyPath, scale
+    THCudaTensor_data(nodeUpdateCuda), THCudaTensor_data(target), 
+    THCudaTensor_data(childParent), THCudaTensor_data(parentChildren), 
+    input->size[1], rootId, maxFamilyPath, maxDept, scale 
   );
+  
+  // copy nodeIds from device to host
+  
+  /* updates will contain parentId (key) sum of scales (value)*/
+  lua_pushinteger(L, (int)(parentId+1));
+  lua_gettable(L, -2);
+  double count = lua_tonumber(L, -1) + scale;
+  lua_pop(L, 1);
+  
+  lua_pushinteger(L, (int)(parentId+1)); /* key */
+  lua_pushnumber(L, count); /* value */
+  lua_settable(L, -3);
     
   return 0;
 }
