@@ -6,7 +6,7 @@ require 'cunnx'
 local cunnxtest = {}
 local precision_forward = 1e-4
 local precision_backward = 1e-2
-local nloop = 100
+local nloop = 1000
 local times = {}
 local cunntestx = {}
 
@@ -47,7 +47,7 @@ function cunnxtest.SoftMaxTree()
    end
    cutorch.synchronize()
    tm.gpu = a:time().real
-
+   
    local error = rescuda:float() - groundtruth
    mytester:assertlt(error:abs():max(), precision_forward, 'error on state (forward) ')
 end
