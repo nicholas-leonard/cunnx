@@ -152,11 +152,10 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
   int i_step = blockDim.x;
   int k = blockIdx.x;
   float *gradInput_k = gradInput + k*nInput;
-  float *nodeGrad, *nodeWeight, *nodeBias;
-  float gradOutput_k = gradOutput[k];
+  float *nodeGrad, *nodeWeight;
+  float grad = gradOutput[k];
   int childId = target[k] - 1;
   int parentId, parentIdx, childIdx, nChildren;
-  //int nOutput;
   float *node;
   int n = 0;
 
@@ -173,8 +172,7 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
     nChildren = (int)node[1];
     
     /* CAddTable + Narrow + LogSoftMax */
-    // accGradParam will use this as linearGradOutput 
-    // (we reuse the _multiBuffer Tensor)
+    // AKA linearGradOutput (we reuse the _multiBuffer Tensor)
     nodeGrad = logsoftOutput + maxFamilyPath*k + n; 
 
     for(int i = tx; i < nChildren; i+=i_step)
@@ -182,11 +180,10 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
     
     __syncthreads();
     if (tx == 0) // compare this to % childIdx
-      nodeOutput[childIdx] += grad;
+      nodeGrad[childIdx] += grad;
 
     /* Linear */
     nodeWeight = weight + parentIdx*nInput;
-    nodeBias = bias + parentIdx;
     
     // addmv (dot products)
     for (int i=tx; i<nInput; i+=i_step)
@@ -213,9 +210,11 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
   }
 }
 
+
+
 static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
 { 
-  //THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
+  THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   THCudaTensor *target = (THCudaTensor*)luaT_checkudata(L, 3, "torch.CudaTensor");  
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
@@ -233,9 +232,8 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
   
-  //input = THCudaTensor_newContiguous(input);
+  input = THCudaTensor_newContiguous(input);
   THCudaTensor_resize1d(output, input->size[0]);
-  THCudaTensor_zero(output);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
@@ -252,7 +250,7 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
   
-  //THCudaTensor_free(input);
+  THCudaTensor_free(input);
   return 1;
 }
 
@@ -260,7 +258,7 @@ static int cunnx_SoftMaxTree_updateGradInput(lua_State *L)
 {
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 3, "torch.CudaTensor");  
-  THCudaTensor *target = (THCudaTensor*)luaT_checkudata(L, 3, "torch.CudaTensor");  
+  THCudaTensor *target = (THCudaTensor*)luaT_checkudata(L, 4, "torch.CudaTensor");  
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
@@ -279,14 +277,12 @@ static int cunnx_SoftMaxTree_updateGradInput(lua_State *L)
   
   luaL_argcheck(L, gradOutput->nDimension == 1, 2, "1D tensor expected");
   
-  input = THCudaTensor_newContiguous(input);
-  THCudaTensor_resize1d(output, input->size[0]);
-  THCudaTensor_zero(output);
+  THCudaTensor_resize2d(gradInput, input->size[0], input->size[1]);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
   dim3 threads(SOFTMAXTREE_THREADS);
-  cunnx_SoftMaxTree_updateOutput_kernel<<<blocks,threads>>>(
+  cunnx_SoftMaxTree_updateGradInput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradInput), THCudaTensor_data(logsoftOutput), 
     THCudaTensor_data(gradOutput), THCudaTensor_data(weight), 
     THCudaTensor_data(bias), THCudaTensor_data(target), 
@@ -298,13 +294,38 @@ static int cunnx_SoftMaxTree_updateGradInput(lua_State *L)
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
   
-  THCudaTensor_free(input);
   return 1;
+}
+
+static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
+{
+  THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
+  THCudaTensor *target = (THCudaTensor*)luaT_checkudata(L, 4, "torch.CudaTensor");  
+  float scale = luaL_optnumber(L, 5, 1);
+  int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
+  int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
+  int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
+  
+  THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParent", "torch.CudaTensor");
+  THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildren", "torch.CudaTensor");
+  
+  THCudaTensor *linearGradOutput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_multiBuffer", "torch.CudaTensor");
+  
+  THCudaTensor *gradWeight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradWeight", "torch.CudaTensor");
+  THCudaTensor *gradBias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradBias", "torch.CudaTensor");
+  
+  lua_getfield(L, 1, "updates"); // this will be a pain to fill
+  
+  luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
+    
+  return 0;
 }
 
 static const struct luaL_Reg cunnx_SoftMaxTree__ [] = {
   {"SoftMaxTree_updateOutput", cunnx_SoftMaxTree_updateOutput},
   {"SoftMaxTree_updateGradInput", cunnx_SoftMaxTree_updateGradInput},
+  {"SoftMaxTree_accGradParameters", cunnx_SoftMaxTree_accGradParameters},
   {NULL, NULL}
 };
 
