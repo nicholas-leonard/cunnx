@@ -189,7 +189,7 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
   int nInput, int rootId, int maxFamilyPath)
 {
   //__shared__ float input_buffer[nInput]; // constant might be faster
-  __shared__ float buffer[SOFTMAXTREE_THREADS+1];
+  __shared__ float buffer[SOFTMAXTREE_THREADS];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int k = blockIdx.x;
@@ -201,6 +201,7 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
   float *node;
   int n = 0;
   
+  // zero gradInputs (for accumulation)
   for (int i=tx; i<nInput; i+=i_step)
     gradInput_k[i] = 0;
 
@@ -241,22 +242,9 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
         // multiply
         buffer[tx] += nodeGrad[j]*nodeWeight[j*nInput + i];
       }
-      // accumulate
+      // accumulate into global memory
       gradInput_k[i] += buffer[tx];
     }
-    /*
-    // addmv (dot products)
-    for (int i=tx; i<nInput; i+=i_step)
-    {
-      // zero buffer
-      gradInput_k[i] = 0;
-      
-      for (int j=0; j<nChildren; j++)
-      {
-        // multiply
-        gradInput_k[i] += nodeGrad[j]*nodeWeight[j*nInput + i];
-      }
-    }*/
     
     n += nChildren;
     /* Break when root is reached */
@@ -311,6 +299,72 @@ static int cunnx_SoftMaxTree_updateGradInput(lua_State *L)
   return 1;
 }
 
+__global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
+  float *gradWeight, float *gradBias, float *input, float* linearGradOutput,
+  float *target, float* childParent, float* parentChildren, 
+  float scale, int nInput, int rootId, int maxFamilyPath)
+{
+  __shared__ float buffer[SOFTMAXTREE_THREADS+1];
+  int tx = threadIdx.x;
+  int i_step = blockDim.x;
+  int k = blockIdx.x;
+  float *input_k = input + k*nInput;
+  float *nodeGradOutput, *nodeGradWeight, *nodeGradBias;
+  int childId = target[k] - 1;
+  int parentId, parentIdx, childIdx, nChildren;
+  float *node;
+  int n = 0;
+  THIntTensor *node;
+  
+  // loop through nodes
+  while(1)
+  {
+    /* get next Node in Tree */
+    node = childParent + childId*2;
+    parentId = (int)node[0] - 1;
+    childIdx = (int)node[1] - 1;
+    
+    node = parentChildren + parentId*2;
+    parentIdx = (int)node[0] - 1;
+    nChildren = (int)node[1];
+    
+    nodeGradOutput = linearGradOutput + maxFamilyPath*k + n; 
+    nodeGradWeight = gradWeight + parentIdx*nInput;
+    nodeGradBias = gradBias + parentIdx;
+      
+    THTensor_(addr)(nodeGradWeight, 1, nodeGradWeight, scale, nodeGradOutput, nodeInput);
+    THTensor_(cadd)(nodeGradBias, nodeGradBias, scale, nodeGradOutput);
+    
+    // addr weights (scalar-products)
+    for (int i=tx; i<nInput; i+=i_step)
+    {
+      // copy input to buffer
+      buffer[tx] = input_k[i];
+    
+      for (int j=0; j<nChildren; j++)
+      {
+        // multiply accumulate weights
+        nodeGradWeight[j*nInput + i] += scale*nodeGrad[j]*buffer[tx];
+      }
+    }
+    
+    // cadd bias
+    for (int i=tx; i<nChildren; i+=i_step)
+    {
+      // multiply accumulate weights
+      nodeGradBias[i] += scale*nodeGrad[i]
+    }
+    
+    n += nChildren;
+    /* Break when root is reached */
+    if (parentId == rootId)
+    {
+      break;
+    }
+    childId = parentId;
+  }
+}
+
 static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
 {
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
@@ -332,6 +386,17 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
+  
+  /* call cudakernel */
+  dim3 blocks(input->size[0]); // each block is an example
+  dim3 threads(SOFTMAXTREE_THREADS);
+  cunnx_SoftMaxTree_accGradParameters_kernel<<<blocks,threads>>>(
+    THCudaTensor_data(gradWeight), THCudaTensor_data(Bias), 
+    THCudaTensor_data(input), THCudaTensor_data(linearGradOutput), 
+    THCudaTensor_data(target), THCudaTensor_data(childParent), 
+    THCudaTensor_data(parentChildren), 
+    input->size[1], rootId, maxFamilyPath, scale
+  );
     
   return 0;
 }
