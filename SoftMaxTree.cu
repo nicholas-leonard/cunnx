@@ -361,7 +361,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     /* Break when root is reached */
     if (parentId == rootId)
     {
-      nodeUpdate[m+1] = 0; // zero means end of buffer
+      nodeUpdate[m] = 0; // zero means end of buffer
       break;
     }
     childId = parentId;
