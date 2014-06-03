@@ -342,7 +342,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
       for (int j=0; j<nChildren; j++)
       {
         // multiply accumulate weights
-        nodeGradWeight[j*nInput + i] += scale*nodeGradOutput[j]*buffer[tx];
+        atomicAdd(&nodeGradWeight[j*nInput + i], scale*nodeGradOutput[j]*buffer[tx]);
       }
     }
     
@@ -350,7 +350,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     for (int j=tx; j<nChildren; j+=i_step)
     {
       // multiply accumulate biases
-      nodeGradBias[j] += scale*nodeGradOutput[j];
+      atomicAdd(&nodeGradBias[j], scale*nodeGradOutput[j]);
     }
     
     // keep track of which node gets gradients

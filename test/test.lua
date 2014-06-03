@@ -41,8 +41,8 @@ function cunnxtest.SoftMaxTree()
    for i = 1,nloop do
       groundtruthF = smt:forward{input, target}
       groundtruthB = smt:backward({input, target}, grad)
-      --smt:updateParameters(0, true)
-      --smt:zeroGradParameters(true)
+      smt:updateParameters(0, true)
+      smt:zeroGradParameters(true)
    end
    tm.cpu = a:time().real
    
@@ -62,8 +62,8 @@ function cunnxtest.SoftMaxTree()
    for i = 1,nloop do
       rescudaF = smt:forward{input, target}
       rescudaB = smt:backward({input, target}, grad)
-      --smt:updateParameters(0, true)
-      --smt:zeroGradParameters(true)
+      smt:updateParameters(0, true)
+      smt:zeroGradParameters(true)
    end
    cutorch.synchronize()
    tm.gpu = a:time().real
@@ -74,8 +74,6 @@ function cunnxtest.SoftMaxTree()
    mytester:assertlt(error:abs():max(), precision_backward, 'error on state (backward) ')
    error = gradWeightCuda:float() - gradWeight
    mytester:assertlt(error:abs():max(), precision_backward, 'error on state (accGradParameters gradWeight) ')
-   print(gradWeight, gradWeightCuda)
-   print(gradBias, gradBiasCuda)
    error = gradBiasCuda:float() - gradBias
    mytester:assertlt(error:abs():max(), precision_backward, 'error on state (accGradParameters gradBias) ')
    error = weightCuda:float() - weight
