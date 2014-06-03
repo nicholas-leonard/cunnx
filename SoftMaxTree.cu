@@ -304,7 +304,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
   float *childParent, float *parentChildren, 
   int nInput, int rootId, int maxFamilyPath, int maxDept, float scale)
 {
-  __shared__ float buffer[SOFTMAXTREE_THREADS+1];
+  __shared__ float buffer[SOFTMAXTREE_THREADS];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int k = blockIdx.x;
@@ -313,7 +313,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
   // reuse _multiBuffer for keeping track of which node gets gradients
   float *nodeUpdate = nodeUpdateCuda + maxDept*k; 
   int childId = target[k] - 1;
-  int parentId, parentIdx, childIdx, nChildren;
+  int parentId, parentIdx, nChildren;
   float *node;
   int n = 0;
   int m = 0;
@@ -324,7 +324,6 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     /* get next Node in Tree */
     node = childParent + childId*2;
     parentId = (int)node[0] - 1;
-    childIdx = (int)node[1] - 1;
     
     node = parentChildren + parentId*2;
     parentIdx = (int)node[0] - 1;
@@ -343,15 +342,15 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
       for (int j=0; j<nChildren; j++)
       {
         // multiply accumulate weights
-        nodeGradWeight[j*nInput + i] += scale*nodeGrad[j]*buffer[tx];
+        nodeGradWeight[j*nInput + i] += scale*nodeGradOutput[j]*buffer[tx];
       }
     }
     
     // cadd bias
-    for (int i=tx; i<nChildren; i+=i_step)
+    for (int j=tx; j<nChildren; j+=i_step)
     {
-      // multiply accumulate weights
-      nodeGradBias[i] += scale*nodeGrad[i]
+      // multiply accumulate biases
+      nodeGradBias[j] += scale*nodeGradOutput[j];
     }
     
     // keep track of which node gets gradients
@@ -389,7 +388,10 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   THCudaTensor *gradWeight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradWeight", "torch.CudaTensor");
   THCudaTensor *gradBias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradBias", "torch.CudaTensor");
   
-  lua_getfield(L, 1, "updates"); // this will be a pain to fill
+  int i, j;
+  THIntTensor *nodeUpdate;
+  
+  lua_getfield(L, 1, "updates");
   
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
@@ -398,24 +400,47 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   dim3 blocks(input->size[0]); // each block is an example
   dim3 threads(SOFTMAXTREE_THREADS);
   cunnx_SoftMaxTree_accGradParameters_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(gradWeight), THCudaTensor_data(Bias), 
+    THCudaTensor_data(gradWeight), THCudaTensor_data(gradBias), 
     THCudaTensor_data(input), THCudaTensor_data(linearGradOutput), 
     THCudaTensor_data(nodeUpdateCuda), THCudaTensor_data(target), 
     THCudaTensor_data(childParent), THCudaTensor_data(parentChildren), 
     input->size[1], rootId, maxFamilyPath, maxDept, scale 
   );
   
-  // copy nodeIds from device to host
+  cudaError errcode = cudaGetLastError();
+  if(errcode != cudaSuccess)
+    THError(cudaGetErrorString(errcode));
   
-  /* updates will contain parentId (key) sum of scales (value)*/
-  lua_pushinteger(L, (int)(parentId+1));
-  lua_gettable(L, -2);
-  double count = lua_tonumber(L, -1) + scale;
-  lua_pop(L, 1);
+  // copy updated nodeIds from device to host
+  THIntTensor_copyCuda(nodeUpdateHost, nodeUpdateCuda);
+  nodeUpdate = THIntTensor_new();
   
-  lua_pushinteger(L, (int)(parentId+1)); /* key */
-  lua_pushnumber(L, count); /* value */
-  lua_settable(L, -3);
+  // fill updates table
+  for (i=0; i<nodeUpdateHost->size[0]; i++)
+  {
+    THIntTensor_select(nodeUpdate, nodeUpdateHost, 0, i);
+    
+    for (j=0; j<nodeUpdateHost->size[1]; j++)
+    {
+      int nodeId = THIntTensor_get1d(nodeUpdate, j);
+      double count;
+      
+      if (nodeId == 0)
+      {
+        break;
+      }
+      
+      /* updates will contain nodeId (key) sum of scales (value)*/
+      lua_pushinteger(L, (int)(nodeId+1));
+      lua_gettable(L, -2);
+      count = lua_tonumber(L, -1) + scale;
+      lua_pop(L, 1);
+      
+      lua_pushinteger(L, (int)(nodeId+1)); /* key */
+      lua_pushnumber(L, count); /* value */
+      lua_settable(L, -3);
+    }
+  }
     
   return 0;
 }
