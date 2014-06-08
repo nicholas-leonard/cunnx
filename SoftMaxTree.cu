@@ -155,6 +155,7 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
+  int maxFamily = (int)luaT_getfieldcheckint(L, 1, "maxFamily");
   
   THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParentCuda", "torch.CudaTensor");
   THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildrenCuda", "torch.CudaTensor");
@@ -167,9 +168,13 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
+  luaL_argcheck(L, maxFamily <= SOFTMAXTREE_MAXCHILDREN, 2, "Hierarchy has node(s) with too many children");
   
   input = THCudaTensor_newContiguous(input);
   THCudaTensor_resize1d(output, input->size[0]);
+  
+  // for some reason, this is necessary:
+  THCudaTensor_zero(logsoftOutput);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
@@ -228,12 +233,14 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
     // AKA linearGradOutput (we reuse the _multiBuffer Tensor)
     nodeGrad = logsoftOutput + maxFamilyPath*k + n; 
 
-    for(int i = tx; i < nChildren; i+=i_step)
-      nodeGrad[i] = -exp(nodeGrad[i])*grad;
+    for(int i=tx; i<nChildren; i+=i_step)
+      nodeGrad[i] = -__expf(nodeGrad[i])*grad;
     
     __syncthreads();
     if (tx == 0) // compare this to % childIdx
       nodeGrad[childIdx] += grad;
+      
+    __syncthreads();
 
     /* Linear */
     nodeWeight = weight + parentIdx*nInput;
@@ -345,7 +352,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     for (int i=tx; i<nInput; i+=i_step)
     {
       // copy input to buffer
-      buffer[tx] = input_k[i];
+      buffer[tx] = input_k[i]; // replace shared with register?
     
       for (int j=0; j<nChildren; j++)
       {
