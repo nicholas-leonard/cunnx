@@ -2,6 +2,7 @@
 #include "THC.h"
 #include "THLogAdd.h" /* DEBUG: WTF */
 
+#include <assert.h>
 #include <thrust/transform.h>
 #include <thrust/reduce.h>
 #include <thrust/transform_reduce.h>

@@ -59,6 +59,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
       for (int i=tx; i<nInput; i+=i_step)
       {
         buffer[tx] += input_k[i]*nodeWeight[j*nInput + i];
+        assert(isfinite(buffer[tx]));
       }
       // add (reduce)
       for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
@@ -68,8 +69,10 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
           buffer[tx] += buffer[tx+stride];
       }
       
-      if (tx == 0)
+      if (tx == 0) {
+        assert(isfinite(buffer[0]));
         linearOutput[j] = buffer[0] + nodeBias[j];
+      }
     }
     
     __syncthreads();
@@ -100,6 +103,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
         if(max_k < buffer[i])
           max_k = buffer[i];
       }
+      assert(isfinite(max_k));
       buffer[SOFTMAXTREE_THREADS] = max_k;
     }
 
@@ -109,7 +113,10 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     float max_k = buffer[SOFTMAXTREE_THREADS];
     buffer[tx] = 0;
     for (int i=tx; i<nOutput; i+=i_step)
+    {
       buffer[tx] += __expf(linearOutput[i]-max_k);
+      assert(isfinite(buffer[tx]));
+    }
 
     __syncthreads();
 
@@ -119,7 +126,9 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
       float logsum_k = 0;
       for (int i=0; i<nOutput; i++)
         logsum_k += buffer[i];
+      
       buffer[SOFTMAXTREE_THREADS] = max_k + __logf(logsum_k);
+      assert(isfinite(buffer[SOFTMAXTREE_THREADS]));
     }
 
     __syncthreads();
@@ -127,7 +136,10 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     // logsoftmax
     float logsum_k = buffer[SOFTMAXTREE_THREADS];
     for (int i=tx; i<nOutput; i+=i_step)
+    {
       nodeOutput[i] = linearOutput[i] - logsum_k;
+      assert(isfinite(nodeOutput[i]));
+    }
       
     __syncthreads();
     
@@ -136,6 +148,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
       narrowsum += nodeOutput[childIdx];
       
     n += nChildren;
+    assert(n <= maxFamilyPath);
     /* Break when root is reached */
     if (parentId == rootId) 
     {
@@ -143,8 +156,11 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     }
     childId = parentId;
   }
-  if (tx == 0)
+  if (tx == 0) 
+  {
     output[k] = narrowsum;
+    assert(isfinite(narrowsum));
+  }
 }
 
 
@@ -234,11 +250,17 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
     nodeGrad = logsoftOutput + maxFamilyPath*k + n; 
 
     for(int i=tx; i<nChildren; i+=i_step)
+    {
       nodeGrad[i] = -__expf(nodeGrad[i])*grad;
+      assert(isfinite(nodeGrad[i]));
+    }
     
     __syncthreads();
-    if (tx == 0) // compare this to % childIdx
+    if (tx == 0)
+    {
       nodeGrad[childIdx] += grad;
+      assert(isfinite(nodeGrad[childIdx]));
+    }
       
     __syncthreads();
 
@@ -255,12 +277,15 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
       {
         // multiply
         buffer[tx] += nodeGrad[j]*nodeWeight[j*nInput + i];
+        assert(isfinite(buffer[tx]));
       }
       // accumulate into global memory
       gradInput_k[i] += buffer[tx];
+      assert(isfinite(gradInput_k[i]));
     }
     
     n += nChildren;
+    assert(n <= maxFamilyPath);
     /* Break when root is reached */
     if (parentId == rootId)
     {
@@ -358,6 +383,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
       {
         // multiply accumulate weights
         atomicAdd(&nodeGradWeight[j*nInput + i], scale*nodeGradOutput[j]*buffer[tx]);
+        assert(isfinite(nodeGradWeight[j*nInput + i]));
       }
     }
     
@@ -366,17 +392,21 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     {
       // multiply accumulate biases
       atomicAdd(&nodeGradBias[j], scale*nodeGradOutput[j]);
+      assert(isfinite(nodeGradBias[j]));
     }
     
     // keep track of which node gets gradients
     nodeUpdate[m] = (float)parentId;
     
     n += nChildren;
+    assert(n <= maxFamilyPath);
     m += 1;
+    assert(m <= maxDept);
     /* Break when root is reached */
     if (parentId == rootId)
     {
-      nodeUpdate[m] = -1; // zero means end of buffer
+      if (m < maxDept)
+        nodeUpdate[m] = -1; // zero means end of buffer
       break;
     }
     childId = parentId;
