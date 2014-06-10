@@ -491,77 +491,42 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
 }
 
 __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
-  float *gradWeight, float *gradBias, float *input, 
-  float *linearGradOutput, float *nodeUpdateCuda, float *target, 
-  float *childParent, float *parentChildren, 
-  int nInput, int rootId, int maxFamilyPath, int maxDept, float scale)
+  float *weight, float *bias, float *gradWeight, float *gradBias, 
+  float *childParent, float *parentChildren, float *paramUpdateCuda,
+  int nInput, float lr)
 {
-  __shared__ float buffer[SOFTMAXTREE_THREADS];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
-  int k = blockIdx.x;
-  float *input_k = input + k*nInput;
-  float *nodeGradOutput, *nodeGradWeight, *nodeGradBias;
-  // reuse _multiBuffer for keeping track of which node gets gradients
-  float *nodeUpdate = nodeUpdateCuda + maxDept*k; 
-  int childId = target[k] - 1;
+  int nodeId = paramUpdateCuda[blockIdx.x] - 1;
   int parentId, parentIdx, nChildren;
-  float *node;
-  int n = 0;
-  int m = 0;
   
-  // loop through nodes
-  while(1)
+  /* get next Node in Tree */
+  float *node = childParent + nodeId*2;
+  parentId = (int)node[0] - 1;
+  
+  node = parentChildren + parentId*2;
+  parentIdx = (int)node[0] - 1;
+  nChildren = (int)node[1];
+    
+  for (int j=0; j<nChildren; j++)
   {
-    /* get next Node in Tree */
-    node = childParent + childId*2;
-    parentId = (int)node[0] - 1;
-    
-    node = parentChildren + parentId*2;
-    parentIdx = (int)node[0] - 1;
-    nChildren = (int)node[1];
-    
-    nodeGradOutput = linearGradOutput + maxFamilyPath*k + n; 
-    nodeGradWeight = gradWeight + parentIdx*nInput;
-    nodeGradBias = gradBias + parentIdx;
-    
-    // addr weights (scalar-products)
+    float *nodeWeight = weight + (parentIdx+j)*nInput;
+    float *nodeBias = bias + (parentIdx+j);
+    float *nodeGradWeight = gradWeight + (parentIdx+j)*nInput;
+    float *nodeGradBias = gradBias + (parentIdx+j);
     for (int i=tx; i<nInput; i+=i_step)
     {
-      // copy input to buffer
-      buffer[tx] = input_k[i]; // replace shared with register?
-    
-      for (int j=0; j<nChildren; j++)
-      {
-        // multiply accumulate weights
-        atomicAdd(&nodeGradWeight[j*nInput + i], scale*nodeGradOutput[j]*buffer[tx]);
-        assert(isfinite(nodeGradWeight[j*nInput + i]));
-      }
+      // update weights
+      nodeWeight[i] -= nodeGradWeight[i]*lr;
+      assert(isfinite(nodeWeight[i]));
     }
+  }
     
-    // cadd bias
-    for (int j=tx; j<nChildren; j+=i_step)
-    {
-      // multiply accumulate biases
-      atomicAdd(&nodeGradBias[j], scale*nodeGradOutput[j]);
-      assert(isfinite(nodeGradBias[j]));
-    }
-    
-    // keep track of which node gets gradients
-    nodeUpdate[m] = (float)parentId;
-    
-    n += nChildren;
-    assert(n <= maxFamilyPath);
-    m += 1;
-    assert(m <= maxDept);
-    /* Break when root is reached */
-    if (parentId == rootId)
-    {
-      if (m < maxDept)
-        nodeUpdate[m] = -1; // zero means end of buffer
-      break;
-    }
-    childId = parentId;
+  for (int j=tx; j<nChildren; j+=i_step)
+  {
+    // update biases
+    nodeBias[j] -= nodeGradBias[j]*lr;
+    assert(isfinite(nodeBias[j]));
   }
 }
 
@@ -614,28 +579,18 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
     /* removes 'value'; keeps 'key' for next iteration */
     lua_pop(L, 1);
     // add node to paramUpdate tensor
-    THIntTensor_set1d(paramUpdateHost, n
+    THIntTensor_set1d(paramUpdateHost, n, nodeId);
     n += 1;
-  }
-
-  // fill updates table
-  while (1)
-  {
-    /* updates will contain nodeId (key) sum of scales (value)*/
-    lua_pushinteger(L, (int)(nodeId+1));
-    lua_gettable(L, -2);
-    count = lua_tonumber(L, -1) + scale;
   }
   
   /* call cudakernel */
-  dim3 blocks(input->size[0]); // each block is an example
+  dim3 blocks(paramUpdateHost->size[0]); // each block is an example
   dim3 threads(SOFTMAXTREE_THREADS);
   cunnx_SoftMaxTree_updateParameters_kernel<<<blocks,threads>>>(
     THCudaTensor_data(weight), THCudaTensor_data(bias), 
     THCudaTensor_data(gradWeight), THCudaTensor_data(gradBias), 
-    THCudaTensor_data(paramUpdateCuda),
     THCudaTensor_data(childParent), THCudaTensor_data(parentChildren), 
-    input->size[1], rootId, maxFamilyPath, maxDept, scale 
+    THCudaTensor_data(paramUpdateCuda), weight->size[1], lr
   );
   
   cudaError errcode = cudaGetLastError();
