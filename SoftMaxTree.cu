@@ -474,7 +474,7 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
     }
   }
   
-  THCudaTensor_free(nodeUpdate);
+  THIntTensor_free(nodeUpdate);
   return 0;
 }
 
@@ -488,6 +488,7 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
   int i_step = blockDim.x;
   int nodeId = paramUpdateCuda[blockIdx.x] - 1;
   int parentId, parentIdx, nChildren;
+  float *nodeGradBias, *nodeBias;
   
   /* get next Node in Tree */
   float *node = childParent + nodeId*2;
