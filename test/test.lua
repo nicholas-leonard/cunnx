@@ -2,7 +2,6 @@ require 'torch'
 require 'cunn'
 require 'nnx'
 require 'cunnx'
-require 'dp'
 
 cutorch.setDevice(1)
 

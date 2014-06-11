@@ -1,6 +1,11 @@
 #define SOFTMAXTREE_THREADS 32
 #define SOFTMAXTREE_MAXCHILDREN 10000
 
+#define CudaAssert( expression ) \
+if ( !(expression)) { \
+printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
+}
+
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float *logsoftOutput, float *input, float *weight, 
   float *bias, float *target, float *childParent, float *parentChildren, 
@@ -46,7 +51,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
       for (int i=tx; i<nInput; i+=i_step)
       {
         buffer[tx] += input_k[i]*nodeWeight[j*nInput + i];
-        assert(isfinite(buffer[tx]));
+        CudaAssert(isfinite(buffer[tx]))
       }
       // add (reduce)
       for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
@@ -56,8 +61,9 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
           buffer[tx] += buffer[tx+stride];
       }
       
-      if (tx == 0) {
-        assert(isfinite(buffer[0]));
+      if (tx == 0) 
+      {
+        CudaAssert(isfinite(buffer[0]))
         linearOutput[j] = buffer[0] + nodeBias[j];
       }
     }
@@ -90,7 +96,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
         if(max_k < buffer[i])
           max_k = buffer[i];
       }
-      assert(isfinite(max_k));
+      CudaAssert(isfinite(max_k))
       buffer[SOFTMAXTREE_THREADS] = max_k;
     }
 
@@ -102,7 +108,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     for (int i=tx; i<nOutput; i+=i_step)
     {
       buffer[tx] += __expf(linearOutput[i]-max_k);
-      assert(isfinite(buffer[tx]));
+      CudaAssert(isfinite(buffer[tx]))
     }
 
     __syncthreads();
@@ -115,7 +121,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
         logsum_k += buffer[i];
       
       buffer[SOFTMAXTREE_THREADS] = max_k + __logf(logsum_k);
-      assert(isfinite(buffer[SOFTMAXTREE_THREADS]));
+      CudaAssert(isfinite(buffer[SOFTMAXTREE_THREADS]))
     }
 
     __syncthreads();
@@ -125,7 +131,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     for (int i=tx; i<nOutput; i+=i_step)
     {
       nodeOutput[i] = linearOutput[i] - logsum_k;
-      assert(isfinite(nodeOutput[i]));
+      CudaAssert(isfinite(nodeOutput[i]))
     }
       
     __syncthreads();
@@ -135,7 +141,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
       narrowsum += nodeOutput[childIdx];
       
     n += nChildren;
-    assert(n <= maxFamilyPath);
+    CudaAssert((n <= maxFamilyPath))
     /* Break when root is reached */
     if (parentId == rootId) 
     {
@@ -146,7 +152,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   if (tx == 0) 
   {
     output[k] = narrowsum;
-    assert(isfinite(narrowsum));
+    CudaAssert(isfinite(narrowsum))
   }
 }
 
@@ -236,14 +242,14 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
     for(int i=tx; i<nChildren; i+=i_step)
     {
       nodeGrad[i] = -__expf(nodeGrad[i])*grad;
-      assert(isfinite(nodeGrad[i]));
+      CudaAssert(isfinite(nodeGrad[i]))
     }
     
     __syncthreads();
     if (tx == 0)
     {
       nodeGrad[childIdx] += grad;
-      assert(isfinite(nodeGrad[childIdx]));
+      CudaAssert(isfinite(nodeGrad[childIdx]))
     }
       
     __syncthreads();
@@ -261,15 +267,15 @@ __global__ void cunnx_SoftMaxTree_updateGradInput_kernel(
       {
         // multiply
         buffer[tx] += nodeGrad[j]*nodeWeight[j*nInput + i];
-        assert(isfinite(buffer[tx]));
+        CudaAssert(isfinite(buffer[tx]))
       }
       // accumulate into global memory
       gradInput_k[i] += buffer[tx];
-      assert(isfinite(gradInput_k[i]));
+      CudaAssert(isfinite(gradInput_k[i]))
     }
     
     n += nChildren;
-    assert(n <= maxFamilyPath);
+    CudaAssert((n <= maxFamilyPath))
     /* Break when root is reached */
     if (parentId == rootId)
     {
@@ -367,7 +373,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
       {
         // multiply accumulate weights
         atomicAdd(&nodeGradWeight[j*nInput + i], scale*nodeGradOutput[j]*buffer[tx]);
-        assert(isfinite(nodeGradWeight[j*nInput + i]));
+        CudaAssert(isfinite(nodeGradWeight[j*nInput + i]))
       }
     }
     
@@ -376,16 +382,16 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
     {
       // multiply accumulate biases
       atomicAdd(&nodeGradBias[j], scale*nodeGradOutput[j]);
-      assert(isfinite(nodeGradBias[j]));
+      CudaAssert(isfinite(nodeGradBias[j]))
     }
     
     // keep track of which node gets gradients
     nodeUpdate[m] = (float)parentId;
     
     n += nChildren;
-    assert(n <= maxFamilyPath);
+    CudaAssert((n <= maxFamilyPath))
     m += 1;
-    assert(m <= maxDept);
+    CudaAssert((m <= maxDept))
     /* Break when root is reached */
     if (parentId == rootId)
     {
@@ -506,7 +512,7 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
       // update weights
       float w = nodeWeight[i];
       w -= nodeGradWeight[i]*lr;
-      assert(isfinite(w));
+      CudaAssert(isfinite(w))
       // norm of row
       buffer[tx] += w*w;
       nodeWeight[i] = w;
@@ -526,6 +532,7 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
     if (norm > maxnorm) 
     {
       norm = maxnorm / (norm + 1e-7);
+      CudaAssert(isfinite(norm))
       // renormalize
       for (int i=tx; i<nInput; i+=i_step)
       {
@@ -540,7 +547,7 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
   {
     // update biases
     nodeBias[j] -= nodeGradBias[j]*lr;
-    assert(isfinite(nodeBias[j]));
+    CudaAssert(isfinite(nodeBias[j]))
   }
 }
 
@@ -564,7 +571,7 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   THCudaTensor *bias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "bias", "torch.CudaTensor");
   THCudaTensor *gradWeight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradWeight", "torch.CudaTensor");
   THCudaTensor *gradBias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradBias", "torch.CudaTensor");
-  
+    
   int n = 0;
   
   /* table is in the stack at index -1 */
