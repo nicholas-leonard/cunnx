@@ -176,9 +176,6 @@ static int cunnx_SoftMaxTree_updateOutput(lua_State *L)
   input = THCudaTensor_newContiguous(input);
   THCudaTensor_resize1d(output, input->size[0]);
   
-  // for some reason, this is necessary:
-  THCudaTensor_zero(logsoftOutput);
-  
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
   dim3 threads(SOFTMAXTREE_THREADS);
