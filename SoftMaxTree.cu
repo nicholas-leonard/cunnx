@@ -501,18 +501,18 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
   for (int j=0; j<nChildren; j++)
   {
     float *nodeWeight = weight + (parentIdx+j)*nInput;
-    float *nodeBias = bias + (parentIdx+j);
     float *nodeGradWeight = gradWeight + (parentIdx+j)*nInput;
-    float *nodeGradBias = gradBias + (parentIdx+j);
     
     buffer[tx] = 0;
     for (int i=tx; i<nInput; i+=i_step)
     {
       // update weights
-      nodeWeight[i] -= nodeGradWeight[i]*lr;
-      assert(isfinite(nodeWeight[i]));
+      float w = nodeWeight[i];
+      w -= nodeGradWeight[i]*lr;
+      assert(isfinite(w));
       // norm of row
-      buffer[tx] += pow(fabs(nodeWeight[i]), value);
+      buffer[tx] += w*w;
+      nodeWeight[i] = w;
     }
     
     // add (reduce)
@@ -525,18 +525,20 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
     
     // clip norms
     __syncthreads();
-    float norm = pow(buffer[0], 1/value);
+    float norm = sqrt(buffer[0]);
     if (norm > maxnorm) 
     {
       norm = maxnorm / (norm + 1e-7);
       // renormalize
-      for (int i=tx; i<nInput; i+=step)
+      for (int i=tx; i<nInput; i+=i_step)
       {
         nodeWeight[i] *= norm;
       }
     }
   }
     
+  nodeGradBias = gradBias + parentIdx;
+  nodeBias = bias + parentIdx;
   for (int j=tx; j<nChildren; j+=i_step)
   {
     // update biases
@@ -571,7 +573,7 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   /* table is in the stack at index -1 */
   lua_getfield(L, 1, "updates");
   lua_pushnil(L);  /* first key */
-  while (lua_next(L, -1) != 0) {
+  while (lua_next(L, -2) != 0) {
     /* uses 'key' (at index -2) and 'value' (at index -1) */
     int nodeId = (int)lua_tonumber(L, -2);
     float scale = (float)lua_tonumber(L, -1);
@@ -581,14 +583,17 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
     n += 1;
   }
   
+  if (n == 0) 
+    return 0;
+  
   THIntTensor_resize1d(paramUpdateHost, n);
-  THIntTensor_resize1d(paramUpdateCuda, n);
+  THCudaTensor_resize1d(paramUpdateCuda, n);
   
   /* table is in the stack at index -1 */
   lua_getfield(L, 1, "updates");
   lua_pushnil(L);  /* first key */
   n = 0;
-  while (lua_next(L, -1) != 0) {
+  while (lua_next(L, -2) != 0) {
     /* uses 'key' (at index -2) and 'value' (at index -1) */
     int nodeId = (int)lua_tonumber(L, -2);
     float scale = (float)lua_tonumber(L, -1);
@@ -598,6 +603,9 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
     THIntTensor_set1d(paramUpdateHost, n, nodeId);
     n += 1;
   }
+  
+  // send node indices to device
+  THCudaTensor_copyInt(paramUpdateCuda, paramUpdateHost);
   
   /* call cudakernel */
   dim3 blocks(paramUpdateHost->size[0]); // each block is an example
@@ -620,7 +628,7 @@ static const struct luaL_Reg cunnx_SoftMaxTree__ [] = {
   {"SoftMaxTree_updateOutput", cunnx_SoftMaxTree_updateOutput},
   {"SoftMaxTree_updateGradInput", cunnx_SoftMaxTree_updateGradInput},
   {"SoftMaxTree_accGradParameters", cunnx_SoftMaxTree_accGradParameters},
-  {"SoftMaxTree_updateParameters", cunnx_SoftMaxTree_updateParameters}
+  {"SoftMaxTree_updateParameters", cunnx_SoftMaxTree_updateParameters},
   {NULL, NULL}
 };
 
