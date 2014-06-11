@@ -1,18 +1,5 @@
-#define MINUS_LOG_THRESHOLD -18.42
 #define SOFTMAXTREE_THREADS 32
 #define SOFTMAXTREE_MAXCHILDREN 10000
-
-struct addvalue_functor
-{
-  const float value;
-
-  addvalue_functor(float value_) : value(value_) {}
-
-    __host__ __device__ float operator()(const float& x) const
-  {
-    return (x+value);
-  }
-};
 
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float *logsoftOutput, float *input, float *weight, 
@@ -486,15 +473,17 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
       lua_settable(L, -3);
     }
   }
-    
+  
+  THCudaTensor_free(nodeUpdate);
   return 0;
 }
 
 __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
   float *weight, float *bias, float *gradWeight, float *gradBias, 
   float *childParent, float *parentChildren, float *paramUpdateCuda,
-  int nInput, float lr)
+  int nInput, float lr, float maxnorm)
 {
+  __shared__ float buffer[SOFTMAXTREE_THREADS];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int nodeId = paramUpdateCuda[blockIdx.x] - 1;
@@ -507,18 +496,43 @@ __global__ void cunnx_SoftMaxTree_updateParameters_kernel(
   node = parentChildren + parentId*2;
   parentIdx = (int)node[0] - 1;
   nChildren = (int)node[1];
-    
+
   for (int j=0; j<nChildren; j++)
   {
     float *nodeWeight = weight + (parentIdx+j)*nInput;
     float *nodeBias = bias + (parentIdx+j);
     float *nodeGradWeight = gradWeight + (parentIdx+j)*nInput;
     float *nodeGradBias = gradBias + (parentIdx+j);
+    
+    buffer[tx] = 0;
     for (int i=tx; i<nInput; i+=i_step)
     {
       // update weights
       nodeWeight[i] -= nodeGradWeight[i]*lr;
       assert(isfinite(nodeWeight[i]));
+      // norm of row
+      buffer[tx] += pow(fabs(nodeWeight[i]), value);
+    }
+    
+    // add (reduce)
+    for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+    {
+      __syncthreads();
+      if (tx < stride)
+        buffer[tx] += buffer[tx+stride];
+    }
+    
+    // clip norms
+    __syncthreads();
+    float norm = pow(buffer[0], 1/value);
+    if (norm > maxnorm) 
+    {
+      norm = maxnorm / (norm + 1e-7);
+      // renormalize
+      for (int i=tx; i<nInput; i+=step)
+      {
+        nodeWeight[i] *= norm;
+      }
     }
   }
     
@@ -537,6 +551,7 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
   int maxDept = (int)luaT_getfieldcheckint(L, 1, "maxDept");
+  int maxnorm = (int)luaT_getfieldcheckint(L, 1, "maxNorm");
   
   THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParentCuda", "torch.CudaTensor");
   THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildrenCuda", "torch.CudaTensor");
@@ -590,13 +605,13 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
     THCudaTensor_data(weight), THCudaTensor_data(bias), 
     THCudaTensor_data(gradWeight), THCudaTensor_data(gradBias), 
     THCudaTensor_data(childParent), THCudaTensor_data(parentChildren), 
-    THCudaTensor_data(paramUpdateCuda), weight->size[1], lr
+    THCudaTensor_data(paramUpdateCuda), weight->size[1], lr, maxnorm
   );
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
-    
+  
   return 0;
 }
 
