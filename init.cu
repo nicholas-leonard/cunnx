@@ -2,6 +2,8 @@
 #include "THC.h"
 #include "THLogAdd.h" /* DEBUG: WTF */
 
+//#include "cublas_v2.h"
+
 #include <thrust/transform.h>
 #include <thrust/reduce.h>
 #include <thrust/transform_reduce.h>
@@ -9,6 +11,7 @@
 #include <thrust/device_ptr.h>
 
 #include "SoftMaxTree.cu"
+//#include "BlockSparse.cu"
 
 LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
 
