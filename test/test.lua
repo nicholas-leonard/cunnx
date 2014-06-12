@@ -91,6 +91,14 @@ function cunnxtest.SoftMaxTree()
    mytester:assertTensorEq(biasCuda:float(), bias, precision_backward, 'error on state (bias) ')
 end
 
+function cunnxtest.BlockSparse()
+   local input = torch.randn(120,100)
+   local target = torch.repeatTensor(torch.IntTensor{20,23,27,10,8}, 24)
+   local grad = torch.randn(120)
+   
+end
+
+
 function nn.testcudax(tests)
    math.randomseed(os.time())
    jac = nn.Jacobian
