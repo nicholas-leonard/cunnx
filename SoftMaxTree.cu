@@ -40,7 +40,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     // addmv (dot products)
     for (int j=0; j<nChildren; j++)
     {
-       // zero buffer
+      // zero buffer
       buffer[tx] = 0;
       
       // multiply

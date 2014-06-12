@@ -1,4 +1,5 @@
-#define SOFTMAXTREE_THREADS 32
+#define BLOCKSPARSE_THREADS 32
+#define BLOCKSPARSE_MAXOUTPUTSIZE 10000
 
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *output, float *input, float *inputIndices, float *outputIndices, 
@@ -6,8 +7,8 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   int inputSize, int outputSize, int nInputBlock, int nOutputBlock,
   int inputWindowSize, int outputWindowSize)
 {
-  __shared__ float buffer[SOFTMAXTREE_THREADS+1];
-  __shared__ float output[SOFTMAXTREE_THREADS];
+  __shared__ float buffer[BLOCKSPARSE_THREADS];
+  __shared__ float outputBuffer[BLOCKSPARSE_MAXOUTPUTSIZE];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int k = blockIdx.x;
@@ -18,29 +19,40 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *outputIndices_k = outputIndices + k*outputWindowSize;
   float *inputScales_k = inputScales + k*inputWindowSize;
   float *outputScales_k = outputScales + k*outputWindowSize;
-  
-  float *blockOutput, *blockWeight, *blockBias;
 
   // loop through blocks
-  for (int l=0; l<inputWindowSize; l++)
+  for (int m=0; m<outputWindowSize; m++)
   {
-    for (int m=0; m<outputWindowSize; m++)
+    int outputIdx = (int)outputIndices_k[m] - 1;
+    float outputScale = outputScale_k[m];
+    // break on non-positive scale. 
+    if (outputScale <= 0) break;
+      
+    float *blockOutput = output_k + m*outputSize;
+    outputBuffer[tx] = 0;
+    
+    for (int l=0; l<inputWindowSize; l++)
     {
-      /* Linear */
-      nodeWeight = weight + parentIdx*nInput;
-      nodeBias = bias + parentIdx;
+      int inputIdx = (int)inputIndices_k[l] - 1;
+      float inputScale = inputScale_k[l];
+      // break on non-positive scale. 
+      if (inputScale <= 0) break;
+      
+      float *blockInput = input_k + l*inputSize;
+      float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
+      float *blockBias = bias + outputIdx*outputSize;
       
       // addmv (dot products)
       for (int j=0; j<outputSize; j++)
       {
-         // zero buffer
+        // zero buffer
         buffer[tx] = 0;
         
         // multiply
-        for (int i=tx; i<nInput; i+=i_step)
+        for (int i=tx; i<inputSize; i+=i_step)
         {
-          buffer[tx] += input_k[i]*nodeWeight[j*nInput + i];
-          CudaAssert(isfinite(buffer[tx]))
+          buffer[tx] += blockInput[i]*nodeWeight[j*inputSize + i];
+          //CudaAssert(isfinite(buffer[tx]))
         }
         // add (reduce)
         for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
@@ -50,32 +62,20 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
             buffer[tx] += buffer[tx+stride];
         }
         
-        if (tx == 0) 
+        if (tx == 0)
         {
-          CudaAssert(isfinite(buffer[0]))
-          linearOutput[j] = buffer[0] + nodeBias[j];
+          //CudaAssert(isfinite(buffer[0]))
+          outputBuffer[j] += buffer[0] + nodeBias[j];
         }
       }
       
-      __syncthreads();
-      
-      /* LogSoftMax */
-      nodeOutput = logsoftOutput + maxFamilyPath*k + n;
-      
-      n += nChildren;
-      CudaAssert((n <= maxFamilyPath))
-      /* Break when root is reached */
-      if (parentId == rootId) 
-      {
-        break;
-      }
-      childId = parentId;
     }
-  }
-  if (tx == 0) 
-  {
-    output[k] = narrowsum;
-    CudaAssert(isfinite(narrowsum))
+    __syncthreads();
+      
+    for (int j=0; j<outputSize; j+=i_step)
+    {
+      blockOutput[j] = outputBuffer[j];
+    }
   }
 }
 
