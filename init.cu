@@ -10,6 +10,11 @@
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
 
+#define CudaAssert( expression ) \
+if ( !(expression)) { \
+printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
+}
+
 #include "SoftMaxTree.cu"
 //#include "BlockSparse.cu"
 

@@ -1,11 +1,6 @@
 #define SOFTMAXTREE_THREADS 32
 #define SOFTMAXTREE_MAXCHILDREN 10000
 
-#define CudaAssert( expression ) \
-if ( !(expression)) { \
-printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
-}
-
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float *logsoftOutput, float *input, float *weight, 
   float *bias, float *target, float *childParent, float *parentChildren, 
@@ -430,7 +425,9 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   lua_getfield(L, 1, "updates");
   
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
+  luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
+  
+  input = THCudaTensor_newContiguous(input); 
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
