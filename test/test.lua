@@ -129,7 +129,7 @@ function cunnxtest.BlockSparse()
    local outputScales2 = outputScales[exampleIdx]:float()
    local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
    local weight2 = bs.weight:clone()
-   local bias2 = bs:bias:clone()
+   local bias2 = bs.bias:clone()
    
    for i=1,inputWindowSize do
       local input = input2[i]

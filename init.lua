@@ -4,4 +4,4 @@ require "cunn"
 require "nnx"
 require "libcunnx"
 
-torch.include('nnx', 'BlockSparse.lua')
+torch.include('cunnx', 'BlockSparse.lua')

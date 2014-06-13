@@ -16,7 +16,7 @@ printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __
 }
 
 #include "SoftMaxTree.cu"
-//#include "BlockSparse.cu"
+#include "BlockSparse.cu"
 
 LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
 
