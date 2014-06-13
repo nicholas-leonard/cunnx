@@ -1,6 +1,6 @@
 #define BLOCKSPARSE_THREADS 32
 #define BLOCKSPARSE_MAXOUTPUTSIZE 10000
-
+  
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *output, float *input, float *inputIndices, float *outputIndices, 
   float *inputScales, float *outputScales, float *weight, float *bias,  
@@ -19,6 +19,8 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *outputIndices_k = outputIndices + k*outputWindowSize;
   float *inputScales_k = inputScales + k*inputWindowSize;
   float *outputScales_k = outputScales + k*outputWindowSize;
+  
+  //if ((tx == 0) && (k == 0)) printf("outputSize %d\n", outputSize); 
 
   // loop through blocks
   for (int m=0; m<outputWindowSize; m++)
@@ -29,18 +31,23 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
     if (outputScale <= 0) break;
       
     float *blockOutput = output_k + m*outputSize;
-    outputBuffer[tx] = 0;
+    float *blockBias = bias + m*outputSize;
+    
+    for (int j=tx; j<outputSize; j+=i_step)
+    {
+      outputBuffer[j] = blockBias[j];
+    }
     
     for (int l=0; l<inputWindowSize; l++)
     {
       int inputIdx = (int)inputIndices_k[l] - 1;
       float inputScale = inputScales_k[l];
       // break on non-positive scale. 
-      if (inputScale <= 0) break;
+      if (inputScale <= 0) 
+        break;
       
       float *blockInput = input_k + l*inputSize;
       float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-      float *blockBias = bias + outputIdx*outputSize;
       
       // addmv (dot products)
       for (int j=0; j<outputSize; j++)
@@ -51,9 +58,10 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         // multiply
         for (int i=tx; i<inputSize; i+=i_step)
         {
-          buffer[tx] += blockInput[i]*blockWeight[j*inputSize + i];
+          buffer[tx] += inputScale*blockInput[i]*blockWeight[j*inputSize + i];
           //CudaAssert(isfinite(buffer[tx]))
         }
+        
         // add (reduce)
         for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
         {
@@ -64,18 +72,22 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         
         if (tx == 0)
         {
-          //CudaAssert(isfinite(buffer[0]))
-          outputBuffer[j] += buffer[0] + blockBias[j];
+          outputBuffer[j] += buffer[0];
         }
+        
       }
       
     }
+    
     __syncthreads();
       
-    for (int j=0; j<outputSize; j+=i_step)
+    for (int j=tx; j<outputSize; j+=i_step)
     {
-      blockOutput[j] = outputBuffer[j];
+      blockOutput[j] = outputScale*outputBuffer[j];
     }
+    
+    __syncthreads();
+    
   }
 }
 
@@ -96,7 +108,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
   int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
   int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
-
+  
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   // nOutputBlock x outputSize
@@ -106,6 +118,10 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   
   luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  luaL_argcheck(L, inputIndices->nDimension == 2, 3, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, outputIndices->nDimension == 2, 4, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, inputScales->nDimension == 2, 5, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, outputScales->nDimension == 2, 6, "2D(batch mode) tensor expected");
   
   // expect contiguous inputs
   input = THCudaTensor_newContiguous(input);
@@ -115,10 +131,11 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   outputScales = THCudaTensor_newContiguous(outputScales); 
   
   THCudaTensor_resize3d(output, input->size[0], outputIndices->size[1], outputSize);
+  THCudaTensor_zero(output);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
-  dim3 threads(SOFTMAXTREE_THREADS);
+  dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateOutput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(output), THCudaTensor_data(input), 
     THCudaTensor_data(inputIndices), THCudaTensor_data(outputIndices),
@@ -133,6 +150,10 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
     THError(cudaGetErrorString(errcode));
   
   THCudaTensor_free(input);
+  THCudaTensor_free(inputIndices);
+  THCudaTensor_free(outputIndices);
+  THCudaTensor_free(inputScales);
+  THCudaTensor_free(outputScales);
   return 1;
 }
 

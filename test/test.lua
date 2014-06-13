@@ -95,7 +95,7 @@ function cunnxtest.BlockSparse()
    local nInputBlock = 10
    local nOutputBlock = 12
    local inputSize = 32
-   local outputSize = 64
+   local outputSize = 5
    local inputWindowSize = 3
    local outputWindowSize = 2
    local batchSize = 8
@@ -112,7 +112,7 @@ function cunnxtest.BlockSparse()
    local outputScales = torch.CudaTensor(batchSize, outputWindowSize)
    outputScales:fill(1)   
    
-   local inputTable = {{input, {inputIndices, outputIndices}}, {inputScales, outputScales}}
+   local inputTable = {{input, {inputIndices, inputScales}}, {outputIndices, outputScales}}
    local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    
