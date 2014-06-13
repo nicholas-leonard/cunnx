@@ -128,36 +128,70 @@ function cunnxtest.BlockSparse()
    local inputScales2 = inputScales[exampleIdx]:float()
    local outputScales2 = outputScales[exampleIdx]:float()
    local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
-   local weight2 = bs.weight:clone()
-   local bias2 = bs.bias:clone()
+   local weight2 = bs.weight:float()
+   local bias2 = bs.bias:float()
    
    for i=1,inputWindowSize do
-      local input = input2[i]
-      local inputScale = inputScales[i]
-      input:mul(inputScale)
+      local input_i = input2[i]
+      local inputScale = inputScales2[i]
+      input_i:mul(inputScale)
    end
       
    for j=1,outputWindowSize do
-      local output = output2[i]
-      local outputIdx = outputIndices[i]
-      local outputScale = outputScales[i]
+      local output_j = output2[j]
+      local outputIdx = outputIndices2[j]
+      local outputScale = outputScales2[j]
       local bias = bias2[outputIdx]
       
-      output:copy(bias)
+      output_j:copy(bias)
       
       for i=1,inputWindowSize do
-         local input = input2[i]
-         local inputIdx = inputIndices[i]
-         local inputScale = inputScales[i]
+         local input_i = input2[i]
+         local inputIdx = inputIndices2[i]
+         local inputScale = inputScales2[i]
          local weight = weight2[outputIdx][inputIdx]
    
-         output:addmv(1, weight, input)
+         output_j:addmv(1, weight, input_i)
       end
       
-      output:mul(outputScale)
+      output_j:mul(outputScale)
    end   
    
+   print(output[exampleIdx]:float()[1])
+   print(bs:forward(inputTable)[exampleIdx]:float()[1])
+   print(bs:forward(inputTable)[exampleIdx]:float()[1])
+   print(output2[1])
+   
    mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward) ')
+   
+   -- compare to dense (nn.Linear)
+   inputWindowSize = nInputBlock
+   outputWindowSize = nOutputBlock
+   
+   input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
+   inputIndices = torch.CudaTensor(batchSize, inputWindowSize)
+   outputIndices = torch.CudaTensor(batchSize, outputWindowSize)
+   for i=1,batchSize do
+      inputIndices[i]:copy(torch.range(1,nInputBlock))
+      outputIndices[i]:copy(torch.range(1,nOutputBlock))
+   end
+   inputScales = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScales:fill(1)
+   outputScales = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScales:fill(1)
+   
+   inputTable = {{input, {inputIndices, inputScales}}, {outputIndices, outputScales}}
+   output = bs:forward(inputTable)
+   
+   
+   local mlp = nn.Linear(nOutputBlock*outputSize, nInputBlock*inputSize)
+   mlp.weight = bs:weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
+   mlp.bias = bs.bias:float():resize(nOutputBlock*outputSize)
+   input2 = input:float():resize(batchSize, inputWindowSize*inputSize)
+   output2 = mlp:forward(input2)
+   
+   
+   mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2, precision_forward, 'error on state (forward dense) ')
 end
 
 
