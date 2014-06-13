@@ -112,7 +112,7 @@ function cunnxtest.BlockSparse()
    local outputScales = torch.CudaTensor(batchSize, outputWindowSize)
    outputScales:fill(1)   
    
-   local inputTable = {input, inputIndices, outputIndices, inputScales, outputScales}
+   local inputTable = {{input, {inputIndices, outputIndices}}, {inputScales, outputScales}}
    local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    
@@ -120,10 +120,44 @@ function cunnxtest.BlockSparse()
    
    mytester:assertTableEq(output:size():totable(), {batchSize, outputWindowSize, outputSize})
    
-   -- compare to full dense version
-   local inputIdx = 3
-   local input2 = input[inputIdx]
-   local bs2 == nn.Sequential()
+   -- compare for one example
+   local exampleIdx = 3
+   local input2 = input[exampleIdx]:float()
+   local inputIndices2 = inputIndices[exampleIdx]:int()
+   local outputIndices2 = outputIndices[exampleIdx]:int()
+   local inputScales2 = inputScales[exampleIdx]:float()
+   local outputScales2 = outputScales[exampleIdx]:float()
+   local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
+   local weight2 = bs.weight:clone()
+   local bias2 = bs:bias:clone()
+   
+   for i=1,inputWindowSize do
+      local input = input2[i]
+      local inputScale = inputScales[i]
+      input:mul(inputScale)
+   end
+      
+   for j=1,outputWindowSize do
+      local output = output2[i]
+      local outputIdx = outputIndices[i]
+      local outputScale = outputScales[i]
+      local bias = bias2[outputIdx]
+      
+      output:copy(bias)
+      
+      for i=1,inputWindowSize do
+         local input = input2[i]
+         local inputIdx = inputIndices[i]
+         local inputScale = inputScales[i]
+         local weight = weight2[outputIdx][inputIdx]
+   
+         output:addmv(1, weight, input)
+      end
+      
+      output:mul(outputScale)
+   end   
+   
+   mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward) ')
 end
 
 
