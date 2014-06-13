@@ -9,6 +9,7 @@
 #include <thrust/device_ptr.h>
 
 #include "SoftMaxTree.cu"
+#include "NoiseReLU.cu"
 
 LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
 
