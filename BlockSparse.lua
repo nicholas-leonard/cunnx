@@ -6,13 +6,12 @@ local BlockSparse, parent = torch.class('nn.BlockSparse', 'nn.Module')
 -- Weights are organized as a matrix of blocks.
 ------------------------------------------------------------------------
 
-function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, sparsityFactor)
+function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize)
    parent.__init(self)
    self.nInputBlock = nInputBlock
    self.nOutputBlock = nOutputBlock
    self.inputSize = inputSize
    self.outputSize = outputSize
-   self.sparsityFactor = sparsityFactor
    
    self.weight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize)
    self.bias = torch.Tensor(nOutputBlock, outputSize)
@@ -31,7 +30,7 @@ function BlockSparse:reset(stdv)
    if stdv then
       stdv = stdv * math.sqrt(3)
    else
-      stdv = 1/math.sqrt(self.nInputBlock*sparsityFactor*self.inputSize)
+      stdv = 1/math.sqrt(self.nInputBlock*0.1*self.inputSize)
    end
    self.weight:uniform(-stdv, stdv)
    self.bias:uniform(-stdv, stdv)

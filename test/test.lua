@@ -92,10 +92,38 @@ function cunnxtest.SoftMaxTree()
 end
 
 function cunnxtest.BlockSparse()
-   local input = torch.randn(120,100)
-   local target = torch.repeatTensor(torch.IntTensor{20,23,27,10,8}, 24)
-   local grad = torch.randn(120)
+   local nInputBlock = 10
+   local nOutputBlock = 12
+   local inputSize = 32
+   local outputSize = 64
+   local inputWindowSize = 3
+   local outputWindowSize = 2
+   local batchSize = 8
    
+   local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
+   local inputIndices = torch.CudaTensor(batchSize, inputWindowSize)
+   local outputIndices = torch.CudaTensor(batchSize, outputWindowSize)
+   for i=1,batchSize do
+      inputIndices[i]:copy(torch.randperm(nInputBlock):narrow(1,1,inputWindowSize))
+      outputIndices[i]:copy(torch.randperm(nOutputBlock):narrow(1,1,outputWindowSize))
+   end
+   local inputScales = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScales:fill(1)
+   local outputScales = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScales:fill(1)   
+   
+   local inputTable = {input, inputIndices, outputIndices, inputScales, outputScales}
+   local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
+   bs:cuda()
+   
+   local output = bs:forward(inputTable)
+   
+   mytester:assertTableEq(output:size():totable(), {batchSize, outputWindowSize, outputSize})
+   
+   -- compare to full dense version
+   local inputIdx = 3
+   local input2 = input[inputIdx]
+   local bs2 == nn.Sequential()
 end
 
 
