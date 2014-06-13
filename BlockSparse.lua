@@ -64,16 +64,16 @@ function BlockSparse:updateOutput(inputTable)
       -- Sparse input, sparse output:
       -- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
       -- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
-      input, innerTable = unpack(inputTable[1]
+      input, innerTable = unpack(inputTable[1])
       inputIndices, inputScales = unpack(innerTable)
       outputIndices, outputScales = unpack(inputTable[2])
    end 
    
    if batchSize ~= input:size(1) then
-      self.inputIndices:resize(inputSize(1),1):fill(1)
-      self.outputIndices:resize(inputSize(1),1):fill(1)
-      self.inputScales:resize(inputSize(1),1):fill(1)
-      self.outputScales:resize(inputSize(1),1):fill(1)
+      self.inputIndices:resize(input:size(1),1):fill(1)
+      self.outputIndices:resize(input:size(1),1):fill(1)
+      self.inputScales:resize(input:size(1),1):fill(1)
+      self.outputScales:resize(input:size(1),1):fill(1)
       self.batchSize = input:size(1)
    end
    return input.nn.BlockSparse_updateOutput(self, input, inputIndices, outputIndices, inputScales, outputScales)
@@ -109,7 +109,7 @@ function BlockSparse:parameters(static)
             table.insert(params, self.weight[outputIdx][inputIdx])
             table.insert(params, self.bias[outputIdx])
             table.insert(grads, self.gradWeight[outputIdx][inputIdx])
-            table.insert(grads, self.gradBias:[outputIdx])
+            table.insert(grads, self.gradBias[outputIdx])
          end
          updated = true
       end

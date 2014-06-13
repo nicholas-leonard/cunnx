@@ -123,8 +123,8 @@ function cunnxtest.BlockSparse()
    -- compare for one example
    local exampleIdx = 3
    local input2 = input[exampleIdx]:float()
-   local inputIndices2 = inputIndices[exampleIdx]:int()
-   local outputIndices2 = outputIndices[exampleIdx]:int()
+   local inputIndices2 = inputIndices[exampleIdx]:float():int()
+   local outputIndices2 = outputIndices[exampleIdx]:float():int()
    local inputScales2 = inputScales[exampleIdx]:float()
    local outputScales2 = outputScales[exampleIdx]:float()
    local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()

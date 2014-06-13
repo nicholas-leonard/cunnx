@@ -2,8 +2,6 @@
 #include "THC.h"
 #include "THLogAdd.h" /* DEBUG: WTF */
 
-//#include "cublas_v2.h"
-
 #include <thrust/transform.h>
 #include <thrust/reduce.h>
 #include <thrust/transform_reduce.h>
@@ -25,6 +23,7 @@ int luaopen_libcunnx(lua_State *L)
   lua_newtable(L);
   
   cunnx_SoftMaxTree_init(L);
+  cunnx_BlockSparse_init(L);
 
   return 1;
 }

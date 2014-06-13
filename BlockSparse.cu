@@ -24,7 +24,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   for (int m=0; m<outputWindowSize; m++)
   {
     int outputIdx = (int)outputIndices_k[m] - 1;
-    float outputScale = outputScale_k[m];
+    float outputScale = outputScales_k[m];
     // break on non-positive scale. 
     if (outputScale <= 0) break;
       
@@ -34,7 +34,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
     for (int l=0; l<inputWindowSize; l++)
     {
       int inputIdx = (int)inputIndices_k[l] - 1;
-      float inputScale = inputScale_k[l];
+      float inputScale = inputScales_k[l];
       // break on non-positive scale. 
       if (inputScale <= 0) break;
       
@@ -51,7 +51,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         // multiply
         for (int i=tx; i<inputSize; i+=i_step)
         {
-          buffer[tx] += blockInput[i]*nodeWeight[j*inputSize + i];
+          buffer[tx] += blockInput[i]*blockWeight[j*inputSize + i];
           //CudaAssert(isfinite(buffer[tx]))
         }
         // add (reduce)
@@ -65,7 +65,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         if (tx == 0)
         {
           //CudaAssert(isfinite(buffer[0]))
-          outputBuffer[j] += buffer[0] + nodeBias[j];
+          outputBuffer[j] += buffer[0] + blockBias[j];
         }
       }
       
@@ -114,7 +114,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   inputScales = THCudaTensor_newContiguous(inputScales);
   outputScales = THCudaTensor_newContiguous(outputScales); 
   
-  THCudaTensor_resize3d(output, input->[0], outputIndices->size[1], outputSize);
+  THCudaTensor_resize3d(output, input->size[0], outputIndices->size[1], outputSize);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
@@ -136,11 +136,11 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   return 1;
 }
 
-static const struct luaL_Reg cunnx_SoftMaxTree__ [] = {
-  {"BlockSparse_updateOutput", cunnx_SoftMaxTree_updateOutput},
-  //{"BlockSparse_updateGradInput", cunnx_SoftMaxTree_updateGradInput},
-  //{"BlockSparse_accGradParameters", cunnx_SoftMaxTree_accGradParameters},
-  //{"BlockSparse_updateParameters", cunnx_SoftMaxTree_updateParameters},
+static const struct luaL_Reg cunnx_BlockSparse__ [] = {
+  {"BlockSparse_updateOutput", cunnx_BlockSparse_updateOutput},
+  //{"BlockSparse_updateGradInput", cunnx_BlockSparse_updateGradInput},
+  //{"BlockSparse_accGradParameters", cunnx_BlockSparse_accGradParameters},
+  //{"BlockSparse_updateParameters", cunnx_BlockSparse_updateParameters},
   {NULL, NULL}
 };
 
@@ -150,4 +150,3 @@ static void cunnx_BlockSparse_init(lua_State *L)
   luaT_registeratname(L, cunnx_BlockSparse__, "nn");
   lua_pop(L,1);
 }
-
