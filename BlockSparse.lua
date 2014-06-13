@@ -43,6 +43,31 @@ function BlockSparse:reset(stdv)
 end
 
 function BlockSparse:updateOutput(inputTable)
+   local input, inputIndices, outputIndices, inputScales, outputScales = self:unpack(inputTable)
+   if batchSize ~= input:size(1) then
+      self.inputIndices:resize(input:size(1),1):fill(1)
+      self.outputIndices:resize(input:size(1),1):fill(1)
+      self.inputScales:resize(input:size(1),1):fill(1)
+      self.outputScales:resize(input:size(1),1):fill(1)
+      self.batchSize = input:size(1)
+   end
+   return input.nn.BlockSparse_updateOutput(self, input, inputIndices, outputIndices, inputScales, outputScales)
+end
+
+function BlockSparse:updateGradInput(inputTable, gradOutput)
+   local input, inputIndices, outputIndices, inputScales, outputScales = self:unpack(inputTable)
+   if self.gradInput then
+      return input.nn.BlockSparse_updateGradInput(self, input, inputIndices, outputIndices, inputScales, outputScales, gradOutput)
+   end
+end
+
+function BlockSparse:accGradParameters(inputTable, gradOutput, scale)
+   local input, inputIndices, outputIndices, inputScales, outputScales = self:unpack(inputTable)
+   scale = scale or 1
+   input.nn.BlockSparse_accGradParameters(self, input, inputIndices, outputIndices, inputScales, outputScales, gradOutput, scale)
+end
+
+function BlockSparse:unpack(inputTable)
    local input, inputIndices, outputIndices, inputScales, outputScales, innerTable
    -- 3 possible use cases
    if self.nInputBlock == 1 then
@@ -68,28 +93,7 @@ function BlockSparse:updateOutput(inputTable)
       inputIndices, inputScales = unpack(innerTable)
       outputIndices, outputScales = unpack(inputTable[2])
    end 
-   
-   if batchSize ~= input:size(1) then
-      self.inputIndices:resize(input:size(1),1):fill(1)
-      self.outputIndices:resize(input:size(1),1):fill(1)
-      self.inputScales:resize(input:size(1),1):fill(1)
-      self.outputScales:resize(input:size(1),1):fill(1)
-      self.batchSize = input:size(1)
-   end
-   return input.nn.BlockSparse_updateOutput(self, input, inputIndices, outputIndices, inputScales, outputScales)
-end
-
-function BlockSparse:updateGradInput(inputTable, gradOutput)
-   local input, input_indices, output_indices = unpack(inputTable)
-   if self.gradInput then
-      return input.nn.BlockSparse_updateGradInput(self, input, gradOutput, input.nn.BlockSparse_updateOutput(self, input, inputIndices, outputIndices, inputScales, outputScales))
-   end
-end
-
-function BlockSparse:accGradParameters(inputTable, gradOutput, scale)
-   local input, inputIndices, outputIndices, inputScales, outputScales = unpack(inputTable)
-   scale = scale or 1
-   input.nn.BlockSparse_accGradParameters(self, input, gradOutput, inputIndices, outputIndices, inputScales, outputScales, scale)
+   return input, inputIndices, outputIndices, inputScales, outputScales
 end
 
 -- when static is true, return parameters with static keys
