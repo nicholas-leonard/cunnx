@@ -20,6 +20,12 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize)
    self.gradBias = torch.Tensor(nOutputBlock, outputSize)
    
    self.updates = {}
+   
+   -- for dense inputs or outputs
+   self.inputIndices = torch.Tensor()
+   self.outputIndices = torch.Tensor()
+   self.inputScales = torch.Tensor()
+   self.outputScales = torch.Tensor()
 
    self.batchSize = 0
    
@@ -37,7 +43,39 @@ function BlockSparse:reset(stdv)
 end
 
 function BlockSparse:updateOutput(inputTable)
-   local input, inputIndices, outputIndices, inputScales, outputScales = unpack(inputTable)
+   local input, inputIndices, outputIndices, inputScales, outputScales, innerTable
+   -- 3 possible use cases
+   if self.nInputBlock == 1 then
+      -- Dense input, sparse output:
+      -- The input and outputs are each a table of 3 tensors: {activation, {indices, scales}}
+      input, innerTable = unpack(inputTable)
+      outputIndices, outputScales = unpack(innerTable)
+      inputIndices = self.inputIndices
+      inputScales = self.inputScales
+   elseif self.nOutputBlock == 1 then
+      -- Sparse input, dense output:
+      -- Input is a multi-table of 3 tensors: {activation, {indices, scales}}
+      -- Output is a tensor of activations.
+      input, innerTable = unpack(inputTable)
+      inputIndices, inputScales = unpack(innerTable)
+      outputIndices = self.outputIndices
+      outputScales = self.outputScales
+   else
+      -- Sparse input, sparse output:
+      -- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
+      -- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
+      input, innerTable = unpack(inputTable[1]
+      inputIndices, inputScales = unpack(innerTable)
+      outputIndices, outputScales = unpack(inputTable[2])
+   end 
+   
+   if batchSize ~= input:size(1) then
+      self.inputIndices:resize(inputSize(1),1):fill(1)
+      self.outputIndices:resize(inputSize(1),1):fill(1)
+      self.inputScales:resize(inputSize(1),1):fill(1)
+      self.outputScales:resize(inputSize(1),1):fill(1)
+      self.batchSize = input:size(1)
+   end
    return input.nn.BlockSparse_updateOutput(self, input, inputIndices, outputIndices, inputScales, outputScales)
 end
 
@@ -121,8 +159,12 @@ function BlockSparse:type(type)
       self.gradWeight = self.gradWeight:type(type)
       self.gradBias = self.gradBias:type(type)
       self.output = self.output:type(type)
-      self.gradInput = self.gradInput:type(type)      
-      self.batchSize = 0 --so that buffers are resized
+      self.gradInput = self.gradInput:type(type)
+      
+      self.inputIndices = self.inputIndices:type(type)  
+      self.outputIndices = self.outputIndices:type(type)  
+      self.inputScales = self.inputScales:type(type)  
+      self.outputScales = self.outputScales:type(type)  
    end
    return self
 end
