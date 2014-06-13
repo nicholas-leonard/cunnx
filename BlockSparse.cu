@@ -20,8 +20,6 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *inputScales_k = inputScales + k*inputWindowSize;
   float *outputScales_k = outputScales + k*outputWindowSize;
   
-  //if ((tx == 0) && (k == 0)) printf("outputSize %d\n", outputSize); 
-
   // loop through blocks
   for (int m=0; m<outputWindowSize; m++)
   {
@@ -31,7 +29,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
     if (outputScale <= 0) break;
       
     float *blockOutput = output_k + m*outputSize;
-    float *blockBias = bias + m*outputSize;
+    float *blockBias = bias + outputIdx*outputSize;
     
     for (int j=tx; j<outputSize; j+=i_step)
     {
@@ -59,7 +57,6 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         for (int i=tx; i<inputSize; i+=i_step)
         {
           buffer[tx] += inputScale*blockInput[i]*blockWeight[j*inputSize + i];
-          //CudaAssert(isfinite(buffer[tx]))
         }
         
         // add (reduce)
@@ -131,7 +128,6 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   outputScales = THCudaTensor_newContiguous(outputScales); 
   
   THCudaTensor_resize3d(output, input->size[0], outputIndices->size[1], outputSize);
-  THCudaTensor_zero(output);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example

@@ -157,14 +157,11 @@ function cunnxtest.BlockSparse()
       output_j:mul(outputScale)
    end   
    
-   print(output[exampleIdx]:float()[1])
-   print(bs:forward(inputTable)[exampleIdx]:float()[1])
-   print(bs:forward(inputTable)[exampleIdx]:float()[1])
-   print(output2[1])
-   
    mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward) ')
-   
+   if true then return end
    -- compare to dense (nn.Linear)
+   nInputBlock = 3
+   nOutputBlock = 2
    inputWindowSize = nInputBlock
    outputWindowSize = nOutputBlock
    
@@ -181,17 +178,18 @@ function cunnxtest.BlockSparse()
    outputScales:fill(1)
    
    inputTable = {{input, {inputIndices, inputScales}}, {outputIndices, outputScales}}
+   bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
+   bs:cuda()
    output = bs:forward(inputTable)
    
    
    local mlp = nn.Linear(nOutputBlock*outputSize, nInputBlock*inputSize)
-   mlp.weight = bs:weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
+   mlp.weight = bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.bias = bs.bias:float():resize(nOutputBlock*outputSize)
    input2 = input:float():resize(batchSize, inputWindowSize*inputSize)
    output2 = mlp:forward(input2)
    
-   
-   mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2, precision_forward, 'error on state (forward dense) ')
+   mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2*10, precision_forward, 'error on state (forward dense) ')
 end
 
 
