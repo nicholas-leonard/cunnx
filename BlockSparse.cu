@@ -261,7 +261,6 @@ __global__ void cunnx_BlockSparse_updateGradInput_kernel(
     {
       gradOutputScale_k[m] += buffer[0];
     }
-    
   }
 }
 
@@ -289,6 +288,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradInput", "torch.CudaTensor");
+  THCudaTensor *gradOutputScale = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradOutputScale", "torch.CudaTensor");
   
   luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
@@ -306,7 +306,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   gradOutput = THCudaTensor_newContiguous(gradOutput);
   
   THCudaTensor_resizeAs(gradInput, input);
-  THCudaTensor_resizeAs(gradOutputScale, input);
+  THCudaTensor_resizeAs(gradOutputScale, outputScale);
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
@@ -330,7 +330,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   THCudaTensor_free(inputScale);
   THCudaTensor_free(outputScale);
   THCudaTensor_free(gradOutput);
-  return 1;
+  return 2;
 }
 
 static const struct luaL_Reg cunnx_BlockSparse__ [] = {

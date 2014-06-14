@@ -60,15 +60,16 @@ end
 
 function BlockSparse:updateGradInput(inputTable, gradOutput)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpack(inputTable)
-   if self.gradInput then
-      return input.nn.BlockSparse_updateGradInput(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput)
-   end
+   local gradInput, gradOutputScale = input.nn.BlockSparse_updateGradInput(
+      self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput
+   )
+   return gradInput, gradOutputScale
 end
 
 function BlockSparse:accGradParameters(inputTable, gradOutput, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpack(inputTable)
    scale = scale or 1
-   input.nn.BlockSparse_accGradParameters(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale)
+   --input.nn.BlockSparse_accGradParameters(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale)
 end
 
 function BlockSparse:unpack(inputTable)
@@ -172,7 +173,8 @@ function BlockSparse:type(type)
       self.inputIndice = self.inputIndice:type(type)  
       self.outputIndice = self.outputIndice:type(type)  
       self.inputScale = self.inputScale:type(type)  
-      self.outputScale = self.outputScale:type(type)  
+      self.outputScale = self.outputScale:type(type) 
+      self.gradOutputScale = self.gradOutputScale:type(type) 
    end
    return self
 end

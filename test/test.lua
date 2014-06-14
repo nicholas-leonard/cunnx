@@ -101,6 +101,7 @@ function cunnxtest.BlockSparse()
    local batchSize = 8
    
    local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
+   local gradOutput = torch.randn(batchSize,outputWindowSize,outputSize):cuda()
    local inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
    local outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
    for i=1,batchSize do
@@ -117,8 +118,10 @@ function cunnxtest.BlockSparse()
    bs:cuda()
    
    local output = bs:forward(inputTable)
+   local gradInput = bs:backward(inputTable, gradOutput)
    
    mytester:assertTableEq(output:size():totable(), {batchSize, outputWindowSize, outputSize})
+   mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputWindowSize, inputSize})
    
    -- compare for one example
    local exampleIdx = 3
@@ -157,8 +160,8 @@ function cunnxtest.BlockSparse()
       output_j:mul(outputScale)
    end   
    
-   mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward) ')
-   if true then return end
+   mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward sparse)')
+   
    -- compare to dense (nn.Linear)
    nInputBlock = 3
    nOutputBlock = 2
@@ -166,6 +169,7 @@ function cunnxtest.BlockSparse()
    outputWindowSize = nOutputBlock
    
    input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
+   gradOutput = torch.randn(batchSize,outputWindowSize,outputSize):cuda()
    inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
    outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
    for i=1,batchSize do
@@ -180,16 +184,23 @@ function cunnxtest.BlockSparse()
    inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
-   output = bs:forward(inputTable)
    
+   output = bs:forward(inputTable)
+   gradOutput = bs:backward(inputTable, gradOutput)   
    
    local mlp = nn.Linear(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.weight = bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.bias = bs.bias:float():resize(nOutputBlock*outputSize)
+   mlp.gradWeight = bs.gradWeight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
+   mlp.gradBias = bs.gradBias:float():resize(nOutputBlock*outputSize)
    input2 = input:float():resize(batchSize, inputWindowSize*inputSize)
-   output2 = mlp:forward(input2)
+   gradOutput2 = gradOutput:float():resize(batchSize, outputWindowSize*outputSize)
    
-   mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2*10, precision_forward, 'error on state (forward dense) ')
+   output2 = mlp:forward(input2)
+   gradInput2 = mlp:backward(input2, gradOutput2)
+   
+   mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2, precision_forward*10, 'error on state (forward dense) ')
+   mytester:assertTensorEq(gradInput:float():resize(batchSize, inputWindowSize*inputSize), gradInput2, precision_backward*10, 'error on state (backward dense) ')
 end
 
 
