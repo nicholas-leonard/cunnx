@@ -22,10 +22,14 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize)
    self.updates = {}
    
    -- for dense inputs or outputs
-   self.inputIndices = torch.Tensor()
-   self.outputIndices = torch.Tensor()
-   self.inputScales = torch.Tensor()
-   self.outputScales = torch.Tensor()
+   self.inputIndice = torch.Tensor()
+   self.outputIndice = torch.Tensor()
+   self.inputScale = torch.Tensor()
+   self.outputScale = torch.Tensor()
+   
+   -- for backward
+   --self.gradInputScale = torch.Tensor() (we don't backward through inputScale)
+   self.gradOutputScale = torch.Tensor()
 
    self.batchSize = 0
    
@@ -43,57 +47,57 @@ function BlockSparse:reset(stdv)
 end
 
 function BlockSparse:updateOutput(inputTable)
-   local input, inputIndices, outputIndices, inputScales, outputScales = self:unpack(inputTable)
+   local input, inputIndice, outputIndice, inputScale, outputScale = self:unpack(inputTable)
    if batchSize ~= input:size(1) then
-      self.inputIndices:resize(input:size(1),1):fill(1)
-      self.outputIndices:resize(input:size(1),1):fill(1)
-      self.inputScales:resize(input:size(1),1):fill(1)
-      self.outputScales:resize(input:size(1),1):fill(1)
+      self.inputIndice:resize(input:size(1),1):fill(1)
+      self.outputIndice:resize(input:size(1),1):fill(1)
+      self.inputScale:resize(input:size(1),1):fill(1)
+      self.outputScale:resize(input:size(1),1):fill(1)
       self.batchSize = input:size(1)
    end
-   return input.nn.BlockSparse_updateOutput(self, input, inputIndices, outputIndices, inputScales, outputScales)
+   return input.nn.BlockSparse_updateOutput(self, input, inputIndice, outputIndice, inputScale, outputScale)
 end
 
 function BlockSparse:updateGradInput(inputTable, gradOutput)
-   local input, inputIndices, outputIndices, inputScales, outputScales = self:unpack(inputTable)
+   local input, inputIndice, outputIndice, inputScale, outputScale = self:unpack(inputTable)
    if self.gradInput then
-      return input.nn.BlockSparse_updateGradInput(self, input, inputIndices, outputIndices, inputScales, outputScales, gradOutput)
+      return input.nn.BlockSparse_updateGradInput(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput)
    end
 end
 
 function BlockSparse:accGradParameters(inputTable, gradOutput, scale)
-   local input, inputIndices, outputIndices, inputScales, outputScales = self:unpack(inputTable)
+   local input, inputIndice, outputIndice, inputScale, outputScale = self:unpack(inputTable)
    scale = scale or 1
-   input.nn.BlockSparse_accGradParameters(self, input, inputIndices, outputIndices, inputScales, outputScales, gradOutput, scale)
+   input.nn.BlockSparse_accGradParameters(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale)
 end
 
 function BlockSparse:unpack(inputTable)
-   local input, inputIndices, outputIndices, inputScales, outputScales, innerTable
+   local input, inputIndice, outputIndice, inputScale, outputScale, innerTable
    -- 3 possible use cases
    if self.nInputBlock == 1 then
       -- Dense input, sparse output:
       -- The input and outputs are each a table of 3 tensors: {activation, {indices, scales}}
       input, innerTable = unpack(inputTable)
-      outputIndices, outputScales = unpack(innerTable)
-      inputIndices = self.inputIndices
-      inputScales = self.inputScales
+      outputIndice, outputScale = unpack(innerTable)
+      inputIndice = self.inputIndice
+      inputScale = self.inputScale
    elseif self.nOutputBlock == 1 then
       -- Sparse input, dense output:
       -- Input is a multi-table of 3 tensors: {activation, {indices, scales}}
       -- Output is a tensor of activations.
       input, innerTable = unpack(inputTable)
-      inputIndices, inputScales = unpack(innerTable)
-      outputIndices = self.outputIndices
-      outputScales = self.outputScales
+      inputIndice, inputScale = unpack(innerTable)
+      outputIndice = self.outputIndice
+      outputScale = self.outputScale
    else
       -- Sparse input, sparse output:
       -- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
       -- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
       input, innerTable = unpack(inputTable[1])
-      inputIndices, inputScales = unpack(innerTable)
-      outputIndices, outputScales = unpack(inputTable[2])
+      inputIndice, inputScale = unpack(innerTable)
+      outputIndice, outputScale = unpack(inputTable[2])
    end 
-   return input, inputIndices, outputIndices, inputScales, outputScales
+   return input, inputIndice, outputIndice, inputScale, outputScale
 end
 
 -- when static is true, return parameters with static keys
@@ -165,10 +169,10 @@ function BlockSparse:type(type)
       self.output = self.output:type(type)
       self.gradInput = self.gradInput:type(type)
       
-      self.inputIndices = self.inputIndices:type(type)  
-      self.outputIndices = self.outputIndices:type(type)  
-      self.inputScales = self.inputScales:type(type)  
-      self.outputScales = self.outputScales:type(type)  
+      self.inputIndice = self.inputIndice:type(type)  
+      self.outputIndice = self.outputIndice:type(type)  
+      self.inputScale = self.inputScale:type(type)  
+      self.outputScale = self.outputScale:type(type)  
    end
    return self
 end

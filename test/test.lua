@@ -101,18 +101,18 @@ function cunnxtest.BlockSparse()
    local batchSize = 8
    
    local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
-   local inputIndices = torch.CudaTensor(batchSize, inputWindowSize)
-   local outputIndices = torch.CudaTensor(batchSize, outputWindowSize)
+   local inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
+   local outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
    for i=1,batchSize do
-      inputIndices[i]:copy(torch.randperm(nInputBlock):narrow(1,1,inputWindowSize))
-      outputIndices[i]:copy(torch.randperm(nOutputBlock):narrow(1,1,outputWindowSize))
+      inputIndice[i]:copy(torch.randperm(nInputBlock):narrow(1,1,inputWindowSize))
+      outputIndice[i]:copy(torch.randperm(nOutputBlock):narrow(1,1,outputWindowSize))
    end
-   local inputScales = torch.CudaTensor(batchSize, inputWindowSize)
-   inputScales:fill(1)
-   local outputScales = torch.CudaTensor(batchSize, outputWindowSize)
-   outputScales:fill(1)   
+   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScale:fill(1)
+   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScale:fill(1)   
    
-   local inputTable = {{input, {inputIndices, inputScales}}, {outputIndices, outputScales}}
+   local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    
@@ -123,32 +123,32 @@ function cunnxtest.BlockSparse()
    -- compare for one example
    local exampleIdx = 3
    local input2 = input[exampleIdx]:float()
-   local inputIndices2 = inputIndices[exampleIdx]:float():int()
-   local outputIndices2 = outputIndices[exampleIdx]:float():int()
-   local inputScales2 = inputScales[exampleIdx]:float()
-   local outputScales2 = outputScales[exampleIdx]:float()
+   local inputIndice2 = inputIndice[exampleIdx]:float():int()
+   local outputIndice2 = outputIndice[exampleIdx]:float():int()
+   local inputScale2 = inputScale[exampleIdx]:float()
+   local outputScale2 = outputScale[exampleIdx]:float()
    local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
    local weight2 = bs.weight:float()
    local bias2 = bs.bias:float()
    
    for i=1,inputWindowSize do
       local input_i = input2[i]
-      local inputScale = inputScales2[i]
+      local inputScale = inputScale2[i]
       input_i:mul(inputScale)
    end
       
    for j=1,outputWindowSize do
       local output_j = output2[j]
-      local outputIdx = outputIndices2[j]
-      local outputScale = outputScales2[j]
+      local outputIdx = outputIndice2[j]
+      local outputScale = outputScale2[j]
       local bias = bias2[outputIdx]
       
       output_j:copy(bias)
       
       for i=1,inputWindowSize do
          local input_i = input2[i]
-         local inputIdx = inputIndices2[i]
-         local inputScale = inputScales2[i]
+         local inputIdx = inputIndice2[i]
+         local inputScale = inputScale2[i]
          local weight = weight2[outputIdx][inputIdx]
    
          output_j:addmv(1, weight, input_i)
@@ -166,18 +166,18 @@ function cunnxtest.BlockSparse()
    outputWindowSize = nOutputBlock
    
    input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
-   inputIndices = torch.CudaTensor(batchSize, inputWindowSize)
-   outputIndices = torch.CudaTensor(batchSize, outputWindowSize)
+   inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
+   outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
    for i=1,batchSize do
-      inputIndices[i]:copy(torch.range(1,nInputBlock))
-      outputIndices[i]:copy(torch.range(1,nOutputBlock))
+      inputIndice[i]:copy(torch.range(1,nInputBlock))
+      outputIndice[i]:copy(torch.range(1,nOutputBlock))
    end
-   inputScales = torch.CudaTensor(batchSize, inputWindowSize)
-   inputScales:fill(1)
-   outputScales = torch.CudaTensor(batchSize, outputWindowSize)
-   outputScales:fill(1)
+   inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScale:fill(1)
+   outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScale:fill(1)
    
-   inputTable = {{input, {inputIndices, inputScales}}, {outputIndices, outputScales}}
+   inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    output = bs:forward(inputTable)
