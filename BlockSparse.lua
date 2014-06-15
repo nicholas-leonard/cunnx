@@ -56,20 +56,25 @@ function BlockSparse:updateOutput(inputTable)
       self.outputScale:resize(input:size(1),1):fill(1)
       self.batchSize = input:size(1)
    end
-   return input.nn.BlockSparse_updateOutput(self, input, inputIndice, outputIndice, inputScale, outputScale)
+   local output = input.nn.BlockSparse_updateOutput(
+      self, input, inputIndice, outputIndice, inputScale, outputScale
+   )
+   return self:packOutput(output, outputIndice, outputScale)
 end
 
-function BlockSparse:updateGradInput(inputTable, gradOutput)
+function BlockSparse:updateGradInput(inputTable, gradOutputTable)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
+   local gradOuput = self.unpackGradOutput(gradOutputTable)
    local gradInput, gradOutputScale = input.nn.BlockSparse_updateGradInput(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput
    )
-   self:packGradInput(input, inputIndice, outputIndice, inputScale, outputScale, gradInput, gradOutputScale)
+   self:packGradInput(outputIndice, gradInput, gradOutputScale)
    return self.gradInput
 end
 
 function BlockSparse:accGradParameters(inputTable, gradOutput, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
+   local gradOuput = self.unpackGradOutput(gradOutputTable)
    scale = scale or 1
    --input.nn.BlockSparse_accGradParameters(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale)
 end
@@ -86,7 +91,7 @@ function BlockSparse:unpackInput(inputTable)
       inputScale = self.inputScale
    elseif self.nOutputBlock == 1 then
       -- Sparse input, dense output:
-      -- Input is a multi-table of 3 tensors: {activation, {indices, scales}}
+      -- Input is a multi-table of 3 tensors: {activation, {inputIndice, inputScale}}
       -- Output is a tensor of activations.
       input, innerTable = unpack(inputTable)
       inputIndice, inputScale = unpack(innerTable)
@@ -103,7 +108,26 @@ function BlockSparse:unpackInput(inputTable)
    return input, inputIndice, outputIndice, inputScale, outputScale
 end
 
-function BlockSparse:packGradInput(input, inputIndice, outputIndice, inputScale, outputScale, gradInput, gradOutputScale)
+function BlockSparse:unpackGradOutput(gradOutputTable)
+   local gradOutput
+   -- 3 possible use cases
+   if self.nInputBlock == 1 then
+      -- Dense input, sparse output:
+      -- gradOutput is a table of 3 tensors: {activation, {indices, scales}}
+      gradOutput = gradOutputTable[1]
+   elseif self.nOutputBlock == 1 then
+      -- Sparse input, dense output:
+      -- gradOutput is a tensor of activations.
+      gradOutput = gradOutputTable
+   else
+      -- Sparse input, sparse output:
+      -- gradOutput is a multi-table of 3 tensors: {activation, {indices, scales}}
+      gradOutput = gradOutputTable[1]
+   end 
+   return gradOutput
+end
+
+function BlockSparse:packGradInput(outputIndice, gradInput, gradOutputScale)
    local gradInputTable = self.gradInput
    -- 3 possible use cases
    if self.nInputBlock == 1 then
@@ -122,6 +146,25 @@ function BlockSparse:packGradInput(input, inputIndice, outputIndice, inputScale,
       gradInputTable[1] = {gradInput}
       gradInputTable[2] = {outputIndice, gradOutputScale}
    end 
+end
+
+function BlockSparse:packOutput(output, outputIndice, outputScale)
+   local outputTable
+   -- 3 possible use cases
+   if self.nInputBlock == 1 then
+      -- Dense input, sparse output:
+      -- output is a table of 3 tensors: {activation, {indices, scales}}
+      outputTable = {output, {outputIndice, outputScale}}
+   elseif self.nOutputBlock == 1 then
+      -- Sparse input, dense output:
+      -- output is a tensor of activations.
+      outputTable = output
+   else
+      -- Sparse input, sparse output:
+      -- output is a multi-table of 3 tensors: {activation, {indices, scales}}
+      outputTable = {output, {outputIndice, outputScale}}
+   end 
+   return gradOutput
 end
 
 -- when static is true, return parameters with static keys
