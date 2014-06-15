@@ -555,8 +555,8 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
-  int maxDept = (int)luaT_getfieldcheckint(L, 1, "maxDept");
-  int maxnorm = (int)luaT_getfieldcheckint(L, 1, "maxNorm");
+  int maxDept = luaT_getfieldcheckint(L, 1, "maxDept");
+  float maxnorm = (float)luaT_getfieldcheckdouble(L, 1, "maxNorm");
   
   THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParentCuda", "torch.CudaTensor");
   THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildrenCuda", "torch.CudaTensor");
@@ -610,7 +610,7 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   THCudaTensor_copyInt(paramUpdateCuda, paramUpdateHost);
   
   /* call cudakernel */
-  dim3 blocks(paramUpdateHost->size[0]); // each block is an example
+  dim3 blocks(paramUpdateHost->size[0]); // each block is a node
   dim3 threads(SOFTMAXTREE_THREADS);
   cunnx_SoftMaxTree_updateParameters_kernel<<<blocks,threads>>>(
     THCudaTensor_data(weight), THCudaTensor_data(bias), 

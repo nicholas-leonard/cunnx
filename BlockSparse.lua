@@ -6,12 +6,13 @@ local BlockSparse, parent = torch.class('nn.BlockSparse', 'nn.Module')
 -- Weights are organized as a matrix of blocks.
 ------------------------------------------------------------------------
 
-function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize)
+function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, maxNorm)
    parent.__init(self)
    self.nInputBlock = nInputBlock
    self.nOutputBlock = nOutputBlock
    self.inputSize = inputSize
    self.outputSize = outputSize
+   self.maxNorm = maxNorm or 1
    
    self.weight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize)
    self.bias = torch.Tensor(nOutputBlock, outputSize)
@@ -31,6 +32,8 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize)
    self.outputIndiceHost = torch.IntTensor()
    self.inputScaleHost = torch.FloatTensor()
    self.outputScaleHost = torch.FloatTensor()
+   self.paramUpdateHost = torch.IntTensor()
+   self.paramUpdateCuda = torch.CudaTensor()
    
    -- for backward
    self.gradOutputScale = torch.Tensor()
