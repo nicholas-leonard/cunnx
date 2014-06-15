@@ -1,11 +1,6 @@
 #define SOFTMAXTREE_THREADS 32
 #define SOFTMAXTREE_MAXCHILDREN 10000
 
-#define CudaAssert( expression ) \
-if ( !(expression)) { \
-printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
-}
-
 __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
   float *output, float *logsoftOutput, float *input, float *weight, 
   float *bias, float *target, float *childParent, float *parentChildren, 
@@ -45,7 +40,7 @@ __global__ void cunnx_SoftMaxTree_updateOutput_kernel(
     // addmv (dot products)
     for (int j=0; j<nChildren; j++)
     {
-       // zero buffer
+      // zero buffer
       buffer[tx] = 0;
       
       // multiply
@@ -430,7 +425,9 @@ static int cunnx_SoftMaxTree_accGradParameters(lua_State *L)
   lua_getfield(L, 1, "updates");
   
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size");  
+  luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
+  
+  input = THCudaTensor_newContiguous(input); 
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each block is an example
@@ -558,8 +555,8 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
-  int maxDept = (int)luaT_getfieldcheckint(L, 1, "maxDept");
-  int maxnorm = (int)luaT_getfieldcheckint(L, 1, "maxNorm");
+  int maxDept = luaT_getfieldcheckint(L, 1, "maxDept");
+  float maxnorm = (float)luaT_getfieldchecknumber(L, 1, "maxNorm");
   
   THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParentCuda", "torch.CudaTensor");
   THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildrenCuda", "torch.CudaTensor");
@@ -613,7 +610,7 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   THCudaTensor_copyInt(paramUpdateCuda, paramUpdateHost);
   
   /* call cudakernel */
-  dim3 blocks(paramUpdateHost->size[0]); // each block is an example
+  dim3 blocks(paramUpdateHost->size[0]); // each block is a node
   dim3 threads(SOFTMAXTREE_THREADS);
   cunnx_SoftMaxTree_updateParameters_kernel<<<blocks,threads>>>(
     THCudaTensor_data(weight), THCudaTensor_data(bias), 
