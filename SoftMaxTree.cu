@@ -556,7 +556,7 @@ static int cunnx_SoftMaxTree_updateParameters(lua_State *L)
   int rootId = luaT_getfieldcheckint(L, 1, "rootId") - 1;
   int maxFamilyPath = (int)luaT_getfieldcheckint(L, 1, "maxFamilyPath");
   int maxDept = luaT_getfieldcheckint(L, 1, "maxDept");
-  float maxnorm = (float)luaT_getfieldcheckdouble(L, 1, "maxNorm");
+  float maxnorm = (float)luaT_getfieldchecknumber(L, 1, "maxNorm");
   
   THCudaTensor *childParent = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "childParentCuda", "torch.CudaTensor");
   THCudaTensor *parentChildren = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "parentChildrenCuda", "torch.CudaTensor");

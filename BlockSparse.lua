@@ -207,7 +207,7 @@ end
 function BlockSparse:updateParameters(learningRate, partial)
    local maxNorm = self.maxNorm
    if partial and self.output.nn.BlockSparse_updateParameters then
-      self.output.nn.BlockSparse_updateParameters(self, learningRate)
+      return self.output.nn.BlockSparse_updateParameters(self, learningRate)
    end
    local params, gradParams = self:parameters(partial)
    if params then

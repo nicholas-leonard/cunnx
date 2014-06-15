@@ -99,6 +99,7 @@ function cunnxtest.BlockSparse()
    local inputWindowSize = 3
    local outputWindowSize = 2
    local batchSize = 8
+   local lr = 0.1
    
    local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
    local gradOutput = torch.randn(batchSize,outputWindowSize,outputSize):cuda()
@@ -181,7 +182,6 @@ function cunnxtest.BlockSparse()
    
          gradInput_i:addmv(1, weight:t(), gradOutput_j)
       end
-      
    end 
    
    mytester:assertTensorEq(gradInput[exampleIdx]:float(), gradInput2, precision_backward, 'error on state (backward sparse gradInput)')
@@ -279,10 +279,19 @@ function cunnxtest.BlockSparse()
    output2 = mlp:forward(input2)
    gradInput2 = mlp:backward(input2, gradOutput2)
    
+   mytester:assertTensorEq(bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.weight, precision_backward*10, 'error on state (weight dense) ')
+   mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (bias dense) ')
+   
+   bs.maxNorm = 1000
+   bs:updateParameters(lr, true)
+   mlp:updateParameters(lr)
+   
    mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2, precision_forward*10, 'error on state (forward dense) ')
    mytester:assertTensorEq(gradInput:float():resize(batchSize, inputWindowSize*inputSize), gradInput2, precision_backward*10, 'error on state (backward dense) ')
    mytester:assertTensorEq(bs.gradWeight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.gradWeight, precision_backward*10, 'error on state (gradWeight dense) ')
    mytester:assertTensorEq(bs.gradBias:float():resize(nOutputBlock*outputSize), mlp.gradBias, precision_backward*10, 'error on state (gradBias dense) ')
+   mytester:assertTensorEq(bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.weight, precision_backward*10, 'error on state (update weight dense) ')
+   mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
 end
 
 
@@ -298,5 +307,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'BlockSparse'})
+nn.testcudax()
 

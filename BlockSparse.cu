@@ -485,7 +485,6 @@ static int cunnx_BlockSparse_accGradParameters(lua_State *L)
   THFloatTensor_copyCuda(inputScaleHost, inputScale);
   THFloatTensor_copyCuda(outputScaleHost, outputScale);
   
-  
   lua_getfield(L, 1, "updates");
   
   // fill updates table
@@ -549,19 +548,19 @@ static int cunnx_BlockSparse_accGradParameters(lua_State *L)
 }
 
 
+
 __global__ void cunnx_BlockSparse_updateParameters_kernel(
   float *weight, float *bias, float *gradWeight, float *gradBias, 
   float *paramUpdateCuda, float lr, float maxnorm,
   int inputSize, int outputSize, int nInputBlock, int nOutputBlock)
 {
   __shared__ float buffer[BLOCKSPARSE_THREADS];
-  __shared__ float gradOutputBuffer[BLOCKSPARSE_MAXBLOCKSIZE];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int k = blockIdx.x;
   
-  int inputIdx = paramUpdateCuda[k] - 1;
-  int outputIdx = paramUpdateCuda[gridDim.x + k] - 1;
+  int inputIdx = (int)paramUpdateCuda[k];
+  int outputIdx = (int)paramUpdateCuda[gridDim.x + k];
   
   float *blockGradWeight = gradWeight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
   float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
@@ -618,13 +617,13 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
 
 static int cunnx_BlockSparse_updateParameters(lua_State *L)
 { 
-  float lr = luaL_optnumber(L, 2, 1);
+  float lr = (float)lua_tonumber(L, 2);
   
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
   int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
   int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
-  float maxnorm = (float)luaT_getfieldcheckdouble(L, 1, "maxNorm");
+  float maxnorm = (float)luaT_getfieldchecknumber(L, 1, "maxNorm");
   
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
@@ -634,7 +633,7 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
   THCudaTensor *gradBias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradBias", "torch.CudaTensor");
   
   THCudaTensor *paramUpdateCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "paramUpdateCuda", "torch.CudaTensor");
-  THIntTensor *paramUpdateHost = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "paramUpdateHost", "torch.CudaTensor");
+  THIntTensor *paramUpdateHost = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "paramUpdateHost", "torch.IntTensor");
   
   int n = 0;
   
@@ -645,7 +644,7 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
   while (lua_next(L, -2) != 0) 
   {
     /* 'key' (at index -2) and 'value' (at index -1) */
-    int inputIdx = (int)lua_tonumber(L, -2));
+    int inputIdx = (int)lua_tonumber(L, -2);
     lua_pushnil(L);  /* first key */
     while (lua_next(L, -2) != 0) 
     {
@@ -663,8 +662,8 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
   if (n == 0) 
     return 0;
   
-  THIntTensor_resize1d(paramUpdateHost, 2, n);
-  THCudaTensor_resize1d(paramUpdateCuda, 2, n);
+  THIntTensor_resize2d(paramUpdateHost, 2, n);
+  THCudaTensor_resize2d(paramUpdateCuda, 2, n);
   
   /* table is in the stack at index -1 */
   lua_getfield(L, 1, "updates");
@@ -673,7 +672,7 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
   while (lua_next(L, -2) != 0) 
   {
     /* 'key' (at index -2) and 'value' (at index -1) */
-    int inputIdx = (int)lua_tonumber(L, -2));
+    int inputIdx = (int)lua_tonumber(L, -2);
     lua_pushnil(L);  /* first key */
     while (lua_next(L, -2) != 0) 
     {
@@ -683,8 +682,9 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
       /* removes 'value'; keeps 'key' for next iteration */
       lua_pop(L, 1);
       // add block to paramUpdate tensor
-      THIntTensor_set2d(paramUpdateHost, n, 0, inputIdx);
-      THIntTensor_set2d(paramUpdateHost, n, 1, outputIdx);
+      THIntTensor_set2d(paramUpdateHost, 0, n, inputIdx-1);
+      THIntTensor_set2d(paramUpdateHost, 1, n, outputIdx-1);
+      
       n += 1;
     }
     /* removes 'value'; keeps 'key' for next iteration */
@@ -695,7 +695,7 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
   THCudaTensor_copyInt(paramUpdateCuda, paramUpdateHost);
   
   /* call cudakernel */
-  dim3 blocks(paramUpdateHost->size[1]); // each block is a block...
+  dim3 blocks(n); // each cuda block is a param block to be updated
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateParameters_kernel<<<blocks,threads>>>(
     THCudaTensor_data(weight), THCudaTensor_data(bias), 
