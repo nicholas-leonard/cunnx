@@ -79,7 +79,7 @@ end
 
 function BlockSparse:accGradParameters(inputTable, gradOutputTable, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
-   local gradOuput = self:unpackGradOutput(gradOutputTable)
+   local gradOutput = self:unpackGradOutput(gradOutputTable)
    scale = scale or 1
    input.nn.BlockSparse_accGradParameters(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
@@ -178,8 +178,8 @@ end
 function BlockSparse:parameters(static)
    local params, grads = {}, {}
    local updated = false
-   for outputIdx, updates in pairs(self.updates) do
-      for inputIdx, scale in pairs(updates) do
+   for inputIdx, updates in pairs(self.updates) do
+      for outputIdx, scale in pairs(updates) do
          if static then
             local weightId = {inputIdx, outputIdx}
             params[weightId] = self.weight[outputIdx][inputIdx]

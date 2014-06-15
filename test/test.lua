@@ -194,6 +194,49 @@ function cunnxtest.BlockSparse()
    
    mytester:assertTensorEq(gradOutputScale[exampleIdx]:float(), gradOutputScale2, precision_backward, 'error on state (backward sparse gradOutputScale)')
    
+   local updates = {}
+   for k=1,inputIndice:size(1) do
+      for i=1,inputIndice:size(2) do
+         local inputIdx = inputIndice[k][i]
+         local inputScale = inputScale[k][i]
+         
+         if inputScale <= 0 then
+            break
+         end
+         
+         local update = updates[inputIdx]
+         if not update then
+            update = {}
+            updates[inputIdx] = update
+         end
+         
+         for j=1,outputIndice:size(2) do
+            local outputIdx = outputIndice[k][j]
+            local outputScale = outputScale[k][j]
+            
+            if outputScale <= 0 then
+               break
+            end
+            
+            local count = update[outputIdx] or 0
+            count = count + 1
+            update[outputIdx] = count
+            
+         end
+         
+      end
+   end
+   
+   for inputIdx, bsUpdate in pairs(bs.updates) do
+      local update = updates[inputIdx] or {}
+      mytester:assertTableEq(update, bsUpdate)
+   end
+   
+   for inputIdx, update in pairs(updates) do
+      local bsUpdate = bs.updates[inputIdx] or {}
+      mytester:assertTableEq(update, bsUpdate)
+   end
+   
    --[[ compare to dense (nn.Linear) ]]--
    nInputBlock = 3
    nOutputBlock = 2
@@ -217,6 +260,7 @@ function cunnxtest.BlockSparse()
    inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
+   bs:zeroGradParameters()
    
    outputTable = bs:forward(inputTable)
    output = outputTable[1]
@@ -230,12 +274,15 @@ function cunnxtest.BlockSparse()
    mlp.gradBias = bs.gradBias:float():resize(nOutputBlock*outputSize)
    input2 = input:float():resize(batchSize, inputWindowSize*inputSize)
    gradOutput2 = gradOutput:float():resize(batchSize, outputWindowSize*outputSize)
+   mlp:zeroGradParameters()
    
    output2 = mlp:forward(input2)
    gradInput2 = mlp:backward(input2, gradOutput2)
    
    mytester:assertTensorEq(output:float():resize(batchSize, outputWindowSize*outputSize), output2, precision_forward*10, 'error on state (forward dense) ')
    mytester:assertTensorEq(gradInput:float():resize(batchSize, inputWindowSize*inputSize), gradInput2, precision_backward*10, 'error on state (backward dense) ')
+   mytester:assertTensorEq(bs.gradWeight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.gradWeight, precision_backward*10, 'error on state (gradWeight dense) ')
+   mytester:assertTensorEq(bs.gradBias:float():resize(nOutputBlock*outputSize), mlp.gradBias, precision_backward*10, 'error on state (gradBias dense) ')
 end
 
 
