@@ -112,13 +112,16 @@ function cunnxtest.BlockSparse()
    inputScale:fill(1)
    local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
    outputScale:fill(1)   
+   local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
    
    local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    
-   local output = bs:forward(inputTable)
-   local gradInput, gradOutputScale = bs:backward(inputTable, gradOutput)
+   local outputTable = bs:forward(inputTable)
+   local output = outputTable[1]
+   local gradInputTable = bs:backward(inputTable, gradOutputTable)
+   local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
    
    mytester:assertTableEq(output:size():totable(), {batchSize, outputWindowSize, outputSize})
    mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputWindowSize, inputSize})
@@ -162,7 +165,7 @@ function cunnxtest.BlockSparse()
    
    mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward sparse)')
    
-   -- compare to dense (nn.Linear)
+   --[[ compare to dense (nn.Linear) ]]--
    nInputBlock = 3
    nOutputBlock = 2
    inputWindowSize = nInputBlock
@@ -180,14 +183,16 @@ function cunnxtest.BlockSparse()
    inputScale:fill(1)
    outputScale = torch.CudaTensor(batchSize, outputWindowSize)
    outputScale:fill(1)
+   gradOutputTable = {gradOutput, {outputIndice, outputScale}}
    
    inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    
-   output = bs:forward(inputTable)
-   gradInput, gradOutputScale = bs:backward(inputTable, gradOutput) 
-   print(gradInput, gradOutputScale)  
+   outputTable = bs:forward(inputTable)
+   output = outputTable[1]
+   gradInputTable = bs:backward(inputTable, gradOutputTable)
+   gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
    
    local mlp = nn.Linear(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.weight = bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)

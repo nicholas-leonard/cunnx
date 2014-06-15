@@ -64,7 +64,7 @@ end
 
 function BlockSparse:updateGradInput(inputTable, gradOutputTable)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
-   local gradOuput = self.unpackGradOutput(gradOutputTable)
+   local gradOutput = self:unpackGradOutput(gradOutputTable)
    local gradInput, gradOutputScale = input.nn.BlockSparse_updateGradInput(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput
    )
@@ -72,9 +72,9 @@ function BlockSparse:updateGradInput(inputTable, gradOutputTable)
    return self.gradInput
 end
 
-function BlockSparse:accGradParameters(inputTable, gradOutput, scale)
+function BlockSparse:accGradParameters(inputTable, gradOutputTable, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
-   local gradOuput = self.unpackGradOutput(gradOutputTable)
+   local gradOuput = self:unpackGradOutput(gradOutputTable)
    scale = scale or 1
    --input.nn.BlockSparse_accGradParameters(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale)
 end
@@ -111,16 +111,15 @@ end
 function BlockSparse:unpackGradOutput(gradOutputTable)
    local gradOutput
    -- 3 possible use cases
-   if self.nInputBlock == 1 then
+   if self.nInputBlock == 1 then 
       -- Dense input, sparse output:
       -- gradOutput is a table of 3 tensors: {activation, {indices, scales}}
       gradOutput = gradOutputTable[1]
-   elseif self.nOutputBlock == 1 then
+   elseif self.nOutputBlock == 1 then 
       -- Sparse input, dense output:
       -- gradOutput is a tensor of activations.
       gradOutput = gradOutputTable
-   else
-      -- Sparse input, sparse output:
+   else -- Sparse input, sparse output:
       -- gradOutput is a multi-table of 3 tensors: {activation, {indices, scales}}
       gradOutput = gradOutputTable[1]
    end 
@@ -164,7 +163,7 @@ function BlockSparse:packOutput(output, outputIndice, outputScale)
       -- output is a multi-table of 3 tensors: {activation, {indices, scales}}
       outputTable = {output, {outputIndice, outputScale}}
    end 
-   return gradOutput
+   return outputTable
 end
 
 -- when static is true, return parameters with static keys
@@ -234,7 +233,7 @@ function BlockSparse:type(type)
       self.gradWeight = self.gradWeight:type(type)
       self.gradBias = self.gradBias:type(type)
       self.output = self.output:type(type)
-      self.gradInput = self.gradInput:type(type)
+      self._gradInput = self._gradInput:type(type)
       
       self.inputIndice = self.inputIndice:type(type)  
       self.outputIndice = self.outputIndice:type(type)  
