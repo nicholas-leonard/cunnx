@@ -337,10 +337,229 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   return 2;
 }
 
+
+  
+__global__ void cunnx_BlockSparse_accGradParameters_kernel(
+  float *gradWeight, float* gradBias, float *gradOutput, 
+  float *input, float *inputIndice, float *outputIndice, 
+  float *inputScale, float *outputScale,  
+  int inputSize, int outputSize, int nInputBlock, int nOutputBlock,
+  int inputWindowSize, int outputWindowSize, float scale)
+{
+  __shared__ float buffer[BLOCKSPARSE_THREADS];
+  __shared__ float gradOutputBuffer[BLOCKSPARSE_MAXBLOCKSIZE];
+  int tx = threadIdx.x;
+  int i_step = blockDim.x;
+  int k = blockIdx.x;
+  
+  float *input_k = input + k*inputWindowSize*inputSize;
+  float *gradOutput_k = gradOutput + k*outputWindowSize*outputSize;
+  float *inputIndice_k = inputIndice + k*inputWindowSize;
+  float *outputIndice_k = outputIndice + k*outputWindowSize;
+  float *inputScale_k = inputScale + k*inputWindowSize;
+  float *outputScale_k = outputScale + k*outputWindowSize;
+  
+  // loop through blocks
+  for (int m=0; m<outputWindowSize; m++)
+  {
+    int outputIdx = (int)outputIndice_k[m] - 1;
+    float outputScale = outputScale_k[m];
+    
+    if (outputScale <= 0) // break on non-positive scale. 
+      break;
+      
+    float *blockGradOutput = gradOutput_k + m*outputSize;
+    
+    for (int j=tx; j<outputSize; j+=i_step)
+    {
+      gradOutputBuffer[j] = blockGradOutput[j];
+    }
+    
+    for (int l=0; l<inputWindowSize; l++)
+    {
+      int inputIdx = (int)inputIndice_k[l] - 1;
+      float inputScale = inputScale_k[l];
+      
+      if (inputScale <= 0) // break on non-positive scale. 
+        break;
+      
+      float *blockGradInput = gradInput_k + l*inputSize;
+      float *blockGradBias = gradBias + outputIdx*outputSize;
+      float *blockGradWeight = gradWeight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
+      
+      // addr weights (scalar-products)
+      for (int i=tx; i<inputSize; i+=i_step)
+      {
+        // copy input to buffer
+        buffer[tx] = blockGradInput[i]; // replace shared with register?
+      
+        for (int j=0; j<outputSize; j++)
+        {
+          // multiply accumulate weights
+          atomicAdd(&blockGradWeight[j*inputSize + i], scale*gradOutputBuffer[j]*buffer[tx]);
+        }
+      }
+    }
+    
+    __syncthreads();
+      
+    // cadd bias 
+    for (int j=tx; j<outputSize; j+=i_step)
+    {
+       // multiply accumulate biases
+      atomicAdd(&blockGradBias[j], scale*gradOutputBuffer[j]);
+    }    
+  }
+}
+
+
+static int cunnx_BlockSparse_accGradParameters(lua_State *L)
+{ 
+  /* input, inputIndice, outputIndice, inputScale, outputScale*/
+  // batchSize x inputWindowSize x inputSize
+  THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
+  // batchSize x inputWindowSize
+  THCudaTensor *inputIndice = (THCudaTensor*)luaT_checkudata(L, 3, "torch.CudaTensor");
+  THCudaTensor *inputScale = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
+  // batchSize x outputWindowSize
+  THCudaTensor *outputIndice = (THCudaTensor*)luaT_checkudata(L, 4, "torch.CudaTensor");
+  THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
+  // batchSize x outputWindowSize x outputSize
+  THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 7, "torch.CudaTensor");
+  float scale = luaL_optnumber(L, 8, 1);
+  
+  int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
+  int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
+  int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
+  int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
+  int i, j, k;
+  
+  // nOutputBlock x nInputBlock x outputSize x inputSize
+  THCudaTensor *gradWeight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradWeight", "torch.CudaTensor");
+  THCudaTensor *gradBias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradBias", "torch.CudaTensor");
+  
+  THIntTensor *inputIndiceHost = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "inputIndiceHost", "torch.IntTensor");
+  THIntTensor *outputIndiceHost = (THIntTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceHost", "torch.IntTensor");
+  THFloatTensor *inputScaleHost = (THFloatTensor*)luaT_getfieldcheckudata(L, 1, "inputScaleHost", "torch.FloatTensor");
+  THFloatTensor *outputScaleHost = (THFloatTensor*)luaT_getfieldcheckudata(L, 1, "outputScaleHost", "torch.FloatTensor");
+  THIntTensor *inputIndiceRow, *outputIndiceRow;
+  THFloatTensor *inputScaleRow, *outputScaleRow;
+  
+  luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
+  luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  luaL_argcheck(L, inputIndice->nDimension == 2, 3, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
+  
+  // expect contiguous inputs
+  input = THCudaTensor_newContiguous(input);
+  inputIndice = THCudaTensor_newContiguous(inputIndice);
+  outputIndice = THCudaTensor_newContiguous(outputIndice); 
+  inputScale = THCudaTensor_newContiguous(inputScale);
+  outputScale = THCudaTensor_newContiguous(outputScale); 
+  gradOutput = THCudaTensor_newContiguous(gradOutput);
+  
+  /* call cudakernel */
+  dim3 blocks(input->size[0]); // each cuda-block is an example
+  dim3 threads(BLOCKSPARSE_THREADS);
+  cunnx_BlockSparse_accGradParameters_kernel<<<blocks,threads>>>(
+    THCudaTensor_data(gradWeight), THCudaTensor_data(gradBias), 
+    THCudaTensor_data(gradOutput), THCudaTensor_data(input),
+    THCudaTensor_data(inputIndice), THCudaTensor_data(outputIndice), 
+    THCudaTensor_data(inputScale), THCudaTensor_data(outputScale), 
+    inputSize, outputSize, nInputBlock, nOutputBlock, 
+    inputIndice->size[1], outputIndice->size[1], scale
+  );
+  
+  cudaError errcode = cudaGetLastError();
+  if(errcode != cudaSuccess)
+    THError(cudaGetErrorString(errcode));
+    
+  // copy updated nodeIds from device to host
+  THIntTensor_resize2d(inputIndiceHost, inputIndice->size[0], inputIndice->size[1]);
+  THIntTensor_resize2d(outputIndiceHost, outputIndice->size[0], outputIndice->size[1]);
+  
+  THIntTensor_copyCuda(inputIndiceHost, inputIndice);
+  THIntTensor_copyCuda(outputIndiceHost, outputIndice);
+  THIntTensor_copyCuda(inputScaleHost, inputScale);
+  THIntTensor_copyCuda(outputScaleHost, outputScale);
+  
+  inputIndiceRow = THIntTensor_new();
+  outputIndiceRow = THIntTensor_new();
+  inputScaleRow = THIntTensor_new();
+  outputScaleRow = THIntTensor_new();
+  
+  lua_getfield(L, 1, "updates");
+  
+  // fill updates table
+  for (k=0; k<input->size[0]; k++)
+  {
+    THIntTensor_select(inputIndiceRow, inputIndiceHost, 0, k);
+    THIntTensor_select(outputIndiceRow, outputIndiceHost, 0, k);
+    THFloatTensor_select(inputScaleRow, inputScaleHost, 0, k);
+    THFloatTensor_select(outputScaleRow, outputScaleHost, 0, k);
+    
+    for (i=0; i<inputIndiceRow->size[0]; i++)
+    {
+      int inputIdx = THIntTensor_get1d(inputIndiceRow, i);
+      float inputScale = THFloatTensor_get1d(inputScaleRow, i);
+      
+      if (inputScale <= 0)
+        break;
+        
+      /* updates will contain inputIdx (key) sum of scales (value)*/
+      lua_pushinteger(L, inputIdx);
+      lua_gettable(L, -2);
+      if lua_isnil(L, -1)
+      {
+        lua_pop(L, 1);
+        lua_newtable(L);
+      }
+      
+      for (j=0; j<outputIndiceRow->size[0]; j++)
+      {
+        int outputIdx = THIntTensor_get1d(outputIndiceRow, j) - 1;
+        float outputScale = THFloatTensor_get1d(outputScaleRow, i);
+        double count;
+        
+        if (outputScale <= 0)
+          break;
+        
+        /* updates will contain inputIdx (key) sum of scales (value)*/
+        lua_pushinteger(L, outputIdx);
+        lua_gettable(L, -2);
+        count = lua_tonumber(L, -1) + scale;
+        lua_pop(L, 1);
+        
+        lua_pushinteger(L, outputIdx); /* key */
+        lua_pushnumber(L, count); /* value */
+        lua_settable(L, -3);
+      }
+      
+      lua_pop(L, 1);
+    }
+  }
+  
+  THIntTensor_free(inputIndiceRow);
+  THIntTensor_free(outputIndiceRow);
+  THFloatTensor_free(inputScaleRow);
+  THFloatTensor_free(outputScaleRow);
+  
+  THCudaTensor_free(input);
+  THCudaTensor_free(inputIndice);
+  THCudaTensor_free(outputIndice);
+  THCudaTensor_free(inputScale);
+  THCudaTensor_free(outputScale);
+  THCudaTensor_free(gradOutput);
+
+  return 0;
+}
+
 static const struct luaL_Reg cunnx_BlockSparse__ [] = {
   {"BlockSparse_updateOutput", cunnx_BlockSparse_updateOutput},
   {"BlockSparse_updateGradInput", cunnx_BlockSparse_updateGradInput},
-  //{"BlockSparse_accGradParameters", cunnx_BlockSparse_accGradParameters},
+  {"BlockSparse_accGradParameters", cunnx_BlockSparse_accGradParameters},
   //{"BlockSparse_updateParameters", cunnx_BlockSparse_updateParameters},
   {NULL, NULL}
 };

@@ -26,6 +26,11 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize)
    self.outputIndice = torch.Tensor()
    self.inputScale = torch.Tensor()
    self.outputScale = torch.Tensor()
+   -- for cuda only
+   self.inputIndiceHost = torch.IntTensor()
+   self.outputIndiceHost = torch.IntTensor()
+   self.inputScaleHost = torch.FloatTensor()
+   self.outputScaleHost = torch.FloatTensor()
    
    -- for backward
    self.gradOutputScale = torch.Tensor()
@@ -76,7 +81,9 @@ function BlockSparse:accGradParameters(inputTable, gradOutputTable, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
    local gradOuput = self:unpackGradOutput(gradOutputTable)
    scale = scale or 1
-   --input.nn.BlockSparse_accGradParameters(self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale)
+   input.nn.BlockSparse_accGradParameters(
+      self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
+   )
 end
 
 function BlockSparse:unpackInput(inputTable)
