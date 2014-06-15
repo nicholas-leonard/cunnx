@@ -155,6 +155,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
 }
 
 
+  
 __global__ void cunnx_BlockSparse_updateGradInput_kernel(
   float *gradInput, float* gradOutputScale, float *gradOutput, 
   float *output, float *inputIndice, float *outputIndice, 
@@ -175,6 +176,7 @@ __global__ void cunnx_BlockSparse_updateGradInput_kernel(
   float *outputIndice_k = outputIndice + k*outputWindowSize;
   float *inputScale_k = inputScale + k*inputWindowSize;
   float *outputScale_k = outputScale + k*outputWindowSize;
+  float *gradOutputScale_k = gradOutputScale + k*outputWindowSize;
   
   // 1. loop through blocks to get gradInput
   for (int l=0; l<inputWindowSize; l++)
@@ -236,8 +238,8 @@ __global__ void cunnx_BlockSparse_updateGradInput_kernel(
   for (int m=0; m<outputWindowSize; m++)
   {
     float outputScale = outputScale_k[m];
-    // break on non-positive scale. 
-    if (outputScale <= 0) break;
+    if (outputScale <= 0) // break on non-positive scale. 
+      break;
       
     float *blockGradOutput = gradOutput_k + m*outputSize;
     float *blockOutput = output_k + m*outputSize;
@@ -259,7 +261,7 @@ __global__ void cunnx_BlockSparse_updateGradInput_kernel(
     
     if (tx == 0)
     {
-      gradOutputScale_k[m] += buffer[0];
+      gradOutputScale_k[m] = buffer[0];
     }
   }
 }
@@ -278,6 +280,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 7, "torch.CudaTensor");
+  THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
   
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
@@ -287,7 +290,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   // batchSize x outputWindowSize x outputSize
-  THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradInput", "torch.CudaTensor");
+  THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_gradInput", "torch.CudaTensor");
   THCudaTensor *gradOutputScale = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradOutputScale", "torch.CudaTensor");
   
   luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
@@ -311,13 +314,13 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(BLOCKSPARSE_THREADS);
-  cunnx_BlockSparse_updateOutput_kernel<<<blocks,threads>>>(
+  cunnx_BlockSparse_updateGradInput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradInput), THCudaTensor_data(gradOutputScale), 
-    THCudaTensor_data(gradOutput), THCudaTensor_data(inputIndice), 
-    THCudaTensor_data(outputIndice), THCudaTensor_data(inputScale), 
-    THCudaTensor_data(outputScale), THCudaTensor_data(weight), 
-    inputSize, outputSize, nInputBlock, nOutputBlock,
-    inputIndice->size[1], outputIndice->size[1]
+    THCudaTensor_data(gradOutput), THCudaTensor_data(output),
+    THCudaTensor_data(inputIndice), THCudaTensor_data(outputIndice), 
+    THCudaTensor_data(inputScale), THCudaTensor_data(outputScale), 
+    THCudaTensor_data(weight), inputSize, outputSize, nInputBlock, 
+    nOutputBlock, inputIndice->size[1], outputIndice->size[1]
   );
   
   cudaError errcode = cudaGetLastError();
@@ -330,6 +333,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   THCudaTensor_free(inputScale);
   THCudaTensor_free(outputScale);
   THCudaTensor_free(gradOutput);
+
   return 2;
 }
 

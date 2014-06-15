@@ -94,7 +94,7 @@ end
 function cunnxtest.BlockSparse()
    local nInputBlock = 10
    local nOutputBlock = 12
-   local inputSize = 32
+   local inputSize = 4
    local outputSize = 5
    local inputWindowSize = 3
    local outputWindowSize = 2
@@ -118,7 +118,7 @@ function cunnxtest.BlockSparse()
    bs:cuda()
    
    local output = bs:forward(inputTable)
-   local gradInput = bs:backward(inputTable, gradOutput)
+   local gradInput, gradOutputScale = bs:backward(inputTable, gradOutput)
    
    mytester:assertTableEq(output:size():totable(), {batchSize, outputWindowSize, outputSize})
    mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputWindowSize, inputSize})
@@ -186,7 +186,8 @@ function cunnxtest.BlockSparse()
    bs:cuda()
    
    output = bs:forward(inputTable)
-   gradOutput = bs:backward(inputTable, gradOutput)   
+   gradInput, gradOutputScale = bs:backward(inputTable, gradOutput) 
+   print(gradInput, gradOutputScale)  
    
    local mlp = nn.Linear(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.weight = bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
