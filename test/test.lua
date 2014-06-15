@@ -134,6 +134,9 @@ function cunnxtest.BlockSparse()
    local inputScale2 = inputScale[exampleIdx]:float()
    local outputScale2 = outputScale[exampleIdx]:float()
    local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
+   local gradOutput2 = gradOutput[exampleIdx]:float()
+   local gradInput2 = torch.FloatTensor(inputWindowSize, inputSize):zero()
+   local gradOutputScale2 = torch.FloatTensor(outputWindowSize):zero()
    local weight2 = bs.weight:float()
    local bias2 = bs.bias:float()
    
@@ -164,6 +167,32 @@ function cunnxtest.BlockSparse()
    end   
    
    mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward sparse)')
+   
+   for i=1,inputWindowSize do
+      local gradInput_i = gradInput2[i]
+      local inputIdx = inputIndice2[i]
+      local inputScale = inputScale2[i]
+      
+      for j=1,outputWindowSize do
+         local gradOutput_j = gradOutput2[j]
+         local outputIdx = outputIndice2[j]
+         local outputScale = outputScale2[j]
+         local weight = weight2[outputIdx][inputIdx]
+   
+         gradInput_i:addmv(1, weight:t(), gradOutput_j)
+      end
+      
+   end 
+   
+   mytester:assertTensorEq(gradInput[exampleIdx]:float(), gradInput2, precision_backward, 'error on state (backward sparse gradInput)')
+   
+   for j=1,outputWindowSize do
+      local gradOutput_j = gradOutput2[j]
+      local output_j = output2[j]
+      gradOutputScale2[j] = torch.cmul(gradOutput_j, output_j):sum()
+   end
+   
+   mytester:assertTensorEq(gradOutputScale[exampleIdx]:float(), gradOutputScale2, precision_backward, 'error on state (backward sparse gradOutputScale)')
    
    --[[ compare to dense (nn.Linear) ]]--
    nInputBlock = 3
@@ -222,5 +251,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax()
+nn.testcudax({'BlockSparse'})
 
