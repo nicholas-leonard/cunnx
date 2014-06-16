@@ -338,8 +338,6 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
 
   return 2;
 }
-
-
   
 __global__ void cunnx_BlockSparse_accGradParameters_kernel(
   float *gradWeight, float* gradBias, float *gradOutput, 
@@ -375,8 +373,10 @@ __global__ void cunnx_BlockSparse_accGradParameters_kernel(
     
     for (int j=tx; j<outputSize; j+=i_step)
     {
-      gradOutputBuffer[j] = blockGradOutput[j];
+      gradOutputBuffer[j] = blockGradOutput[j]*outputScale*scale;
     }
+    
+    __syncthreads(); // needed for some reason
     
     for (int l=0; l<inputWindowSize; l++)
     {
@@ -398,18 +398,18 @@ __global__ void cunnx_BlockSparse_accGradParameters_kernel(
         for (int j=0; j<outputSize; j++)
         {
           // multiply accumulate weights
-          atomicAdd(&blockGradWeight[j*inputSize + i], scale*gradOutputBuffer[j]*buffer[tx]);
+          atomicAdd(&(blockGradWeight[j*inputSize + i]), gradOutputBuffer[j]*buffer[tx]);
         }
       }
     }
     
-    __syncthreads();
-      
+    __syncthreads(); // needed for some reason
+    
     // cadd bias 
     for (int j=tx; j<outputSize; j+=i_step)
     {
        // multiply accumulate biases
-      atomicAdd(&blockGradBias[j], scale*gradOutputBuffer[j]);
+      atomicAdd(&(blockGradBias[j]), gradOutputBuffer[j]);
     }    
   }
 }
