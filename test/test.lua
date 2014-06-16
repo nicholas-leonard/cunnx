@@ -269,32 +269,41 @@ function cunnxtest.BlockSparse_benchmark()
    local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
+   bs:zeroGradParameters()
+   bs:forward(inputTable)
    
    cutorch.synchronize()
    local a = torch.Timer()
    for i=1,nloop do
-      --bs:zeroGradParameters()
+      --bs:zeroGradParameters(true)
       local outputTable = bs:forward(inputTable)
-      local output = outputTable[1]
-      local gradInputTable = bs:backward(inputTable, gradOutputTable)
-      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
-      bs:updateParameters(lr, true)
+      --local output = outputTable[1]
+      --bs:updateGradInput(inputTable, gradOutputTable)
+      --bs:accGradParameters(inputTable, gradOutputTable)
+      --local gradInputTable = bs:backward(inputTable, gradOutputTable)
+      
+      --local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      --bs:updateParameters(lr, true) -- also zeros grad parameters
    end
    cutorch.synchronize()
    tm.gpu = a:time().real
    tm2.gpu = a:time().real
+   print("BlockSparse time :", tm.gpu)
    
    local mlp = nn.Linear(nInputBlock*inputSize, nOutputBlock*outputSize)
    mlp:cuda()
    local input3 = torch.randn(batchSize, nInputBlock*inputSize):cuda()
    local gradOutput3 = torch.randn(batchSize, nOutputBlock*outputSize):cuda()
+   mlp:forward(input3)
    a:reset()
    for i=1,nloop do
       --mlp:zeroGradParameters()
       mlp:forward(input3)
-      mlp:backward(input3, gradOutput3)
-      mlp.weight:renorm(2, 1, 1)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
       mlp:updateParameters(lr)
+      mlp.weight:renorm(2, 1, 1)
    end
    cutorch.synchronize()
    tm.cpu = a:time().real
@@ -303,13 +312,16 @@ function cunnxtest.BlockSparse_benchmark()
    mlp:cuda()
    input3 = torch.randn(batchSize, inputWindowSize*inputSize):cuda()
    gradOutput3 = torch.randn(batchSize, outputWindowSize*outputSize):cuda()
+   mlp:forward(input3)
    a:reset()
    for i=1,nloop do
       --mlp:zeroGradParameters()
       mlp:forward(input3)
-      mlp:backward(input3, gradOutput3)
-      mlp.weight:renorm(2, 1, 1)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
       mlp:updateParameters(lr)
+      mlp.weight:renorm(2, 1, 1)
    end
    cutorch.synchronize()
    tm2.cpu = a:time().real
@@ -390,5 +402,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'BlockSparse_dense'}) --{'BlockSparse', 'BlockSparse_dense', 'BlockSparse_benchmark'})
+nn.testcudax({'BlockSparse_dense', 'BlockSparse', 'BlockSparse_benchmark'})
 

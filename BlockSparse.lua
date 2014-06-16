@@ -17,8 +17,8 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, ma
    self.weight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize)
    self.bias = torch.Tensor(nOutputBlock, outputSize)
    
-   self.gradWeight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize)
-   self.gradBias = torch.Tensor(nOutputBlock, outputSize)
+   self.gradWeight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize):zero()
+   self.gradBias = torch.Tensor(nOutputBlock, outputSize):zero()
    
    self.updates = {}
    
@@ -87,6 +87,7 @@ function BlockSparse:accGradParameters(inputTable, gradOutputTable, scale)
    input.nn.BlockSparse_accGradParameters(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
    )
+   self.zeroed = false
 end
 
 function BlockSparse:unpackInput(inputTable)
@@ -207,7 +208,11 @@ end
 function BlockSparse:updateParameters(learningRate, partial)
    local maxNorm = self.maxNorm
    if partial and self.output.nn.BlockSparse_updateParameters then
-      return self.output.nn.BlockSparse_updateParameters(self, learningRate)
+      self.output.nn.BlockSparse_updateParameters(self, learningRate)
+      self.bias:add(-learningRate, self.gradBias)
+      self.gradBias:zero()
+      self.zeroed = true
+      return
    end
    local params, gradParams = self:parameters(partial)
    if params then
@@ -229,6 +234,10 @@ function BlockSparse:getBlockParameters(inputIdx, outputIdx)
 end
 
 function BlockSparse:zeroGradParameters(partial)
+   if partial and self.zeroed then
+      self.updates = {}
+      return
+   end
    local _,gradParams = self:parameters(partial)
    for k,gradParam in pairs(gradParams) do
       gradParam:zero()

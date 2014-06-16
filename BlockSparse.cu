@@ -566,8 +566,6 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
   
   float *blockGradWeight = gradWeight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
   float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-  float *blockGradBias = gradBias + outputIdx*outputSize;
-  float *blockBias = bias + outputIdx*outputSize;
   
   // update blockWeight and renorm
   for (int j=0; j<outputSize; j++)
@@ -578,9 +576,10 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
     buffer[tx] = 0;
     for (int i=tx; i<inputSize; i+=i_step)
     {
-      // update weights
+      // update weights and zero grad weight
       float w = rowWeight[i];
       w -= rowGradWeight[i]*lr;
+      rowGradWeight[i] = 0;
       // norm of row
       buffer[tx] += w*w;
       rowWeight[i] = w;
@@ -607,14 +606,9 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
       }
     }
   }
-  
-  // update blockBias
-  for (int j=tx; j<outputSize; j+=i_step)
-  {
-    blockBias[j] -= blockGradBias[j]*lr;
-  }
-  
 }
+
+//TODO update and zero bias
 
 
 static int cunnx_BlockSparse_updateParameters(lua_State *L)
