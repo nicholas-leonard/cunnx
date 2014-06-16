@@ -1,5 +1,5 @@
-#define BLOCKSPARSE_THREADS 32
-#define BLOCKSPARSE_MAXBLOCKSIZE 10000
+#define BLOCKSPARSE_THREADS 64
+#define BLOCKSPARSE_MAXBLOCKSIZE 64
   
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *output, float *input, float *inputIndice, float *outputIndice, 
@@ -120,13 +120,15 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, inputSize <= BLOCKSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
+  luaL_argcheck(L, outputSize <= BLOCKSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
   
   // expect contiguous inputs
   input = THCudaTensor_newContiguous(input);
   inputIndice = THCudaTensor_newContiguous(inputIndice);
   outputIndice = THCudaTensor_newContiguous(outputIndice); 
   inputScale = THCudaTensor_newContiguous(inputScale);
-  outputScale = THCudaTensor_newContiguous(outputScale); 
+  outputScale = THCudaTensor_newContiguous(outputScale);
   
   THCudaTensor_resize3d(output, input->size[0], outputIndice->size[1], outputSize);
   

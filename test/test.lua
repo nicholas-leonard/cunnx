@@ -8,7 +8,7 @@ cutorch.setDevice(1)
 local cunnxtest = {}
 local precision_forward = 1e-6
 local precision_backward = 1e-6
-local nloop = 1000
+local nloop = 100
 local times = {}
 local cunntestx = {}
 
@@ -92,13 +92,13 @@ function cunnxtest.SoftMaxTree()
 end
 
 function cunnxtest.BlockSparse()
-   local nInputBlock = 10
-   local nOutputBlock = 12
-   local inputSize = 4
-   local outputSize = 5
-   local inputWindowSize = 3
-   local outputWindowSize = 2
-   local batchSize = 8
+   local nInputBlock = 128
+   local nOutputBlock = 128
+   local inputSize = 64
+   local outputSize = 64
+   local inputWindowSize = 8
+   local outputWindowSize = 8
+   local batchSize = 512
    local lr = 0.1
    
    local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
@@ -229,60 +229,143 @@ function cunnxtest.BlockSparse()
    
    for inputIdx, bsUpdate in pairs(bs.updates) do
       local update = updates[inputIdx] or {}
-      mytester:assertTableEq(update, bsUpdate)
+      mytester:assertTableEq(update, bsUpdate, 0, 'error on updates table')
    end
    
    for inputIdx, update in pairs(updates) do
       local bsUpdate = bs.updates[inputIdx] or {}
-      mytester:assertTableEq(update, bsUpdate)
+      mytester:assertTableEq(update, bsUpdate, 0, 'error on updates table')
    end
+end
    
-   --[[ compare to dense (nn.Linear) ]]--
-   nInputBlock = 3
-   nOutputBlock = 2
-   inputWindowSize = nInputBlock
-   outputWindowSize = nOutputBlock
+function cunnxtest.BlockSparse_benchmark()
+   local nInputBlock = 128
+   local nOutputBlock = 128
+   local inputSize = 64
+   local outputSize = 64
+   local inputWindowSize = 8
+   local outputWindowSize = 8
+   local batchSize = 512
+   local lr = 0.1
    
-   input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
-   gradOutput = torch.randn(batchSize,outputWindowSize,outputSize):cuda()
-   inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
-   outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
+   local tm, tm2 = {}, {}
+   times['BlockSparse vs full dense'] = tm
+   times['BlockSparse vs partial dense'] = tm2
+   
+   local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
+   local gradOutput = torch.randn(batchSize,outputWindowSize,outputSize):cuda()
+   local inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
+   local outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
+   for i=1,batchSize do
+      inputIndice[i]:copy(torch.randperm(nInputBlock):narrow(1,1,inputWindowSize))
+      outputIndice[i]:copy(torch.randperm(nOutputBlock):narrow(1,1,outputWindowSize))
+   end
+   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScale:fill(1)
+   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScale:fill(1)   
+   local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
+   
+   local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
+   local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
+   bs:cuda()
+   
+   cutorch.synchronize()
+   local a = torch.Timer()
+   for i=1,nloop do
+      --bs:zeroGradParameters()
+      local outputTable = bs:forward(inputTable)
+      local output = outputTable[1]
+      local gradInputTable = bs:backward(inputTable, gradOutputTable)
+      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      bs:updateParameters(lr, true)
+   end
+   cutorch.synchronize()
+   tm.gpu = a:time().real
+   tm2.gpu = a:time().real
+   
+   local mlp = nn.Linear(nInputBlock*inputSize, nOutputBlock*outputSize)
+   mlp:cuda()
+   local input3 = torch.randn(batchSize, nInputBlock*inputSize):cuda()
+   local gradOutput3 = torch.randn(batchSize, nOutputBlock*outputSize):cuda()
+   a:reset()
+   for i=1,nloop do
+      --mlp:zeroGradParameters()
+      mlp:forward(input3)
+      mlp:backward(input3, gradOutput3)
+      mlp.weight:renorm(2, 1, 1)
+      mlp:updateParameters(lr)
+   end
+   cutorch.synchronize()
+   tm.cpu = a:time().real
+   
+   mlp = nn.Linear(inputWindowSize*inputSize, outputWindowSize*outputSize)
+   mlp:cuda()
+   input3 = torch.randn(batchSize, inputWindowSize*inputSize):cuda()
+   gradOutput3 = torch.randn(batchSize, outputWindowSize*outputSize):cuda()
+   a:reset()
+   for i=1,nloop do
+      --mlp:zeroGradParameters()
+      mlp:forward(input3)
+      mlp:backward(input3, gradOutput3)
+      mlp.weight:renorm(2, 1, 1)
+      mlp:updateParameters(lr)
+   end
+   cutorch.synchronize()
+   tm2.cpu = a:time().real
+end
+   
+function cunnxtest.BlockSparse_dense()
+   -- compare to dense (nn.Linear)
+   local nInputBlock = 3
+   local nOutputBlock = 2
+   local inputSize = 64
+   local outputSize = 64
+   local inputWindowSize = nInputBlock
+   local outputWindowSize = nOutputBlock
+   local batchSize = 512
+   local lr = 0.1
+   
+   local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
+   local gradOutput = torch.randn(batchSize,outputWindowSize,outputSize):cuda()
+   local inputIndice = torch.CudaTensor(batchSize, inputWindowSize)
+   local outputIndice = torch.CudaTensor(batchSize, outputWindowSize)
    for i=1,batchSize do
       inputIndice[i]:copy(torch.range(1,nInputBlock))
       outputIndice[i]:copy(torch.range(1,nOutputBlock))
    end
-   inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
    inputScale:fill(1)
-   outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
    outputScale:fill(1)
-   gradOutputTable = {gradOutput, {outputIndice, outputScale}}
+   local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
    
-   inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
-   bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
+   local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
+   local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
    bs:zeroGradParameters()
    
-   outputTable = bs:forward(inputTable)
-   output = outputTable[1]
-   gradInputTable = bs:backward(inputTable, gradOutputTable)
-   gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+   local outputTable = bs:forward(inputTable)
+   local output = outputTable[1]
+   local gradInputTable = bs:backward(inputTable, gradOutputTable)
+   local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
    
    local mlp = nn.Linear(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.weight = bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.bias = bs.bias:float():resize(nOutputBlock*outputSize)
    mlp.gradWeight = bs.gradWeight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize)
    mlp.gradBias = bs.gradBias:float():resize(nOutputBlock*outputSize)
-   input2 = input:float():resize(batchSize, inputWindowSize*inputSize)
-   gradOutput2 = gradOutput:float():resize(batchSize, outputWindowSize*outputSize)
+   local input2 = input:float():resize(batchSize, inputWindowSize*inputSize)
+   local gradOutput2 = gradOutput:float():resize(batchSize, outputWindowSize*outputSize)
    mlp:zeroGradParameters()
    
-   output2 = mlp:forward(input2)
-   gradInput2 = mlp:backward(input2, gradOutput2)
+   local output2 = mlp:forward(input2)
+   local gradInput2 = mlp:backward(input2, gradOutput2)
    
    mytester:assertTensorEq(bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.weight, precision_backward*10, 'error on state (weight dense) ')
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (bias dense) ')
    
-   bs.maxNorm = 1000
+   bs.maxNorm = 100000
    bs:updateParameters(lr, true)
    mlp:updateParameters(lr)
    
@@ -307,5 +390,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax()
+nn.testcudax({'BlockSparse_dense'}) --{'BlockSparse', 'BlockSparse_dense', 'BlockSparse_benchmark'})
 
