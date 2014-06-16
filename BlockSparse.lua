@@ -90,6 +90,102 @@ function BlockSparse:accGradParameters(inputTable, gradOutputTable, scale)
    self.zeroed = false
 end
 
+function BlockSparse:updateParameters(learningRate, partial)
+   local maxNorm = self.maxNorm
+   if partial and self.output.nn.BlockSparse_updateParameters then
+      self.output.nn.BlockSparse_updateParameters(self, learningRate)
+      self.bias:add(-learningRate, self.gradBias)
+      self.gradBias:zero()
+      self.zeroed = true
+      return
+   end
+   local params, gradParams = self:parameters(partial)
+   if params then
+      for k,param in pairs(params) do
+         param:add(-learningRate, gradParams[k])
+         if param:dim() == 2 and maxNorm then
+            param:renorm(2,1,maxNorm)
+         end
+      end
+   end
+end
+
+-- when static is true, return parameters with static keys
+-- i.e. keys that don't change from batch to batch
+function BlockSparse:parameters(static)
+   local params, grads = {}, {}
+   local updated = false
+   for inputIdx, updates in pairs(self.updates) do
+      for outputIdx, scale in pairs(updates) do
+         if static then
+            local weightId = {inputIdx, outputIdx}
+            params[weightId] = self.weight[outputIdx][inputIdx]
+            grads[weightId] = self.gradWeight[outputIdx][inputIdx]
+            params[outputIdx] = self.bias[outputIdx]
+            grads[outputIdx] = self.gradBias[outputIdx]
+         else
+            table.insert(params, self.weight[outputIdx][inputIdx])
+            table.insert(params, self.bias[outputIdx])
+            table.insert(grads, self.gradWeight[outputIdx][inputIdx])
+            table.insert(grads, self.gradBias[outputIdx])
+         end
+         updated = true
+      end
+   end
+   if not updated then
+      return {self.weight, self.bias}, {self.gradWeight, self.gradBias}
+   end
+   return params, grads
+end
+
+function BlockSparse:getBlockParameters(inputIdx, outputIdx)
+   local weight = self.weight[outputIdx][inputIdx]
+   local bias = self.bias[outputIdx]
+   local gradWeight = self.gradWeight[outputIdx][inputIdx]
+   local gradBias = self.gradBias[outputIdx]
+   return {weight, bias}, {gradWeight, gradBias}
+end
+
+function BlockSparse:zeroGradParameters(partial)
+   if partial and self.zeroed then
+      self.updates = {}
+      return
+   end
+   local _,gradParams = self:parameters(partial)
+   for k,gradParam in pairs(gradParams) do
+      gradParam:zero()
+   end
+   self.updates = {}
+end
+
+function BlockSparse:type(type)
+   if type and (type == 'torch.FloatTensor' or type == 'torch.DoubleTensor' or type == 'torch.CudaTensor') then
+      self.weight = self.weight:type(type)
+      self.bias = self.bias:type(type)
+      self.gradWeight = self.gradWeight:type(type)
+      self.gradBias = self.gradBias:type(type)
+      self.output = self.output:type(type)
+      self._gradInput = self._gradInput:type(type)
+      
+      self.inputIndice = self.inputIndice:type(type)  
+      self.outputIndice = self.outputIndice:type(type)  
+      self.inputScale = self.inputScale:type(type)  
+      self.outputScale = self.outputScale:type(type) 
+      self.gradOutputScale = self.gradOutputScale:type(type) 
+   end
+   return self
+end
+
+-- generate a Clone that shares parameters and metadata 
+-- without wasting memory
+function BlockSparse:sharedClone()
+   error"NotImplemented"
+   return smt:share(self, 'weight', 'bias')
+end
+
+-- we do not need to accumulate parameters when sharing
+BlockSparse.sharedAccUpdateGradParameters = BlockSparse.accUpdateGradParameters
+
 function BlockSparse:unpackInput(inputTable)
    local input, inputIndice, outputIndice, inputScale, outputScale, innerTable
    -- 3 possible use cases
@@ -176,100 +272,3 @@ function BlockSparse:packOutput(output, outputIndice, outputScale)
    end 
    return outputTable
 end
-
--- when static is true, return parameters with static keys
--- i.e. keys that don't change from batch to batch
-function BlockSparse:parameters(static)
-   local params, grads = {}, {}
-   local updated = false
-   for inputIdx, updates in pairs(self.updates) do
-      for outputIdx, scale in pairs(updates) do
-         if static then
-            local weightId = {inputIdx, outputIdx}
-            params[weightId] = self.weight[outputIdx][inputIdx]
-            grads[weightId] = self.gradWeight[outputIdx][inputIdx]
-            params[outputIdx] = self.bias[outputIdx]
-            grads[outputIdx] = self.gradBias[outputIdx]
-         else
-            table.insert(params, self.weight[outputIdx][inputIdx])
-            table.insert(params, self.bias[outputIdx])
-            table.insert(grads, self.gradWeight[outputIdx][inputIdx])
-            table.insert(grads, self.gradBias[outputIdx])
-         end
-         updated = true
-      end
-   end
-   if not updated then
-      return {self.weight, self.bias}, {self.gradWeight, self.gradBias}
-   end
-   return params, grads
-end
-
-function BlockSparse:updateParameters(learningRate, partial)
-   local maxNorm = self.maxNorm
-   if partial and self.output.nn.BlockSparse_updateParameters then
-      self.output.nn.BlockSparse_updateParameters(self, learningRate)
-      self.bias:add(-learningRate, self.gradBias)
-      self.gradBias:zero()
-      self.zeroed = true
-      return
-   end
-   local params, gradParams = self:parameters(partial)
-   if params then
-      for k,param in pairs(params) do
-         param:add(-learningRate, gradParams[k])
-         if param:dim() == 2 and maxNorm then
-            param:renorm(2,1,maxNorm)
-         end
-      end
-   end
-end
-
-function BlockSparse:getBlockParameters(inputIdx, outputIdx)
-   local weight = self.weight[outputIdx][inputIdx]
-   local bias = self.bias[outputIdx]
-   local gradWeight = self.gradWeight[outputIdx][inputIdx]
-   local gradBias = self.gradBias[outputIdx]
-   return {weight, bias}, {gradWeight, gradBias}
-end
-
-function BlockSparse:zeroGradParameters(partial)
-   if partial and self.zeroed then
-      self.updates = {}
-      return
-   end
-   local _,gradParams = self:parameters(partial)
-   for k,gradParam in pairs(gradParams) do
-      gradParam:zero()
-   end
-   self.updates = {}
-end
-
-function BlockSparse:type(type)
-   if type and (type == 'torch.FloatTensor' or type == 'torch.DoubleTensor' or type == 'torch.CudaTensor') then
-      self.weight = self.weight:type(type)
-      self.bias = self.bias:type(type)
-      self.gradWeight = self.gradWeight:type(type)
-      self.gradBias = self.gradBias:type(type)
-      self.output = self.output:type(type)
-      self._gradInput = self._gradInput:type(type)
-      
-      self.inputIndice = self.inputIndice:type(type)  
-      self.outputIndice = self.outputIndice:type(type)  
-      self.inputScale = self.inputScale:type(type)  
-      self.outputScale = self.outputScale:type(type) 
-      self.gradOutputScale = self.gradOutputScale:type(type) 
-   end
-   return self
-end
-
--- generate a Clone that shares parameters and metadata 
--- without wasting memory
-function BlockSparse:sharedClone()
-   error"NotImplemented"
-   return smt:share(self, 'weight', 'bias')
-end
-
--- we do not need to accumulate parameters when sharing
-BlockSparse.sharedAccUpdateGradParameters = BlockSparse.accUpdateGradParameters
-

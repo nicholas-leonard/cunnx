@@ -3,7 +3,7 @@ require 'cunn'
 require 'nnx'
 require 'cunnx'
 
-cutorch.setDevice(1)
+cutorch.setDevice(2)
 
 local cunnxtest = {}
 local precision_forward = 1e-6
