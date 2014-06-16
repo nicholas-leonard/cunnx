@@ -368,7 +368,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
         // multiply accumulate weights
         float dw = scale*nodeGradOutput[j]*buffer[tx];
         CudaAssert(isfinite(dw))
-        atomicAdd(&nodeGradWeight[j*nInput + i], dw);
+        atomicAdd(&(nodeGradWeight[j*nInput + i]), dw);
       }
     }
     
@@ -378,7 +378,7 @@ __global__ void cunnx_SoftMaxTree_accGradParameters_kernel(
       // multiply accumulate biases
       float db = scale*nodeGradOutput[j];
       CudaAssert(isfinite(db))
-      atomicAdd(&nodeGradBias[j], db);
+      atomicAdd(&(nodeGradBias[j]), db);
     }
     
     // keep track of which node gets gradients

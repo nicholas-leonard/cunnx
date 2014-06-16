@@ -1,5 +1,7 @@
 #define BLOCKSPARSE_THREADS 32
-#define BLOCKSPARSE_MAXBLOCKSIZE 10000
+#define BLOCKSPARSE_MAXBLOCKSIZE 300
+#define BLOCKSPARSE_MINBLOCKSIZE 32
+#define BLOCKSPARSE_MINBLOCKS 32
   
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *output, float *input, float *inputIndice, float *outputIndice, 
@@ -21,6 +23,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *outputScale_k = outputScale + k*outputWindowSize;
   
   // loop through blocks
+  #pragma unroll 32
   for (int m=0; m<outputWindowSize; m++)
   {
     int outputIdx = (int)outputIndice_k[m] - 1;
@@ -37,6 +40,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       outputBuffer[j] = blockBias[j];
     }
     
+    #pragma unroll 32
     for (int l=0; l<inputWindowSize; l++)
     {
       int inputIdx = (int)inputIndice_k[l] - 1;
@@ -49,6 +53,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
       
       // addmv (dot products)
+      #pragma unroll 32
       for (int j=0; j<outputSize; j++)
       {
         // zero buffer
@@ -61,7 +66,8 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         }
         
         // add (reduce)
-        for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+        #pragma unroll 32
+        for (unsigned int stride = BLOCKSPARSE_THREADS >> 1; stride > 0; stride >>= 1)
         {
           __syncthreads();
           if (tx < stride)
@@ -120,13 +126,15 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, inputSize <= BLOCKSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
+  luaL_argcheck(L, outputSize <= BLOCKSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
   
   // expect contiguous inputs
   input = THCudaTensor_newContiguous(input);
   inputIndice = THCudaTensor_newContiguous(inputIndice);
   outputIndice = THCudaTensor_newContiguous(outputIndice); 
   inputScale = THCudaTensor_newContiguous(inputScale);
-  outputScale = THCudaTensor_newContiguous(outputScale); 
+  outputScale = THCudaTensor_newContiguous(outputScale);
   
   THCudaTensor_resize3d(output, input->size[0], outputIndice->size[1], outputSize);
   
@@ -336,8 +344,6 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
 
   return 2;
 }
-
-
   
 __global__ void cunnx_BlockSparse_accGradParameters_kernel(
   float *gradWeight, float* gradBias, float *gradOutput, 
@@ -373,8 +379,10 @@ __global__ void cunnx_BlockSparse_accGradParameters_kernel(
     
     for (int j=tx; j<outputSize; j+=i_step)
     {
-      gradOutputBuffer[j] = blockGradOutput[j];
+      gradOutputBuffer[j] = blockGradOutput[j]*outputScale*scale;
     }
+    
+    __syncthreads(); // needed for some reason
     
     for (int l=0; l<inputWindowSize; l++)
     {
@@ -396,18 +404,18 @@ __global__ void cunnx_BlockSparse_accGradParameters_kernel(
         for (int j=0; j<outputSize; j++)
         {
           // multiply accumulate weights
-          atomicAdd(&blockGradWeight[j*inputSize + i], scale*gradOutputBuffer[j]*buffer[tx]);
+          atomicAdd(&(blockGradWeight[j*inputSize + i]), gradOutputBuffer[j]*buffer[tx]);
         }
       }
     }
     
-    __syncthreads();
-      
+    __syncthreads(); // needed for some reason
+    
     // cadd bias 
     for (int j=tx; j<outputSize; j+=i_step)
     {
        // multiply accumulate biases
-      atomicAdd(&blockGradBias[j], scale*gradOutputBuffer[j]);
+      atomicAdd(&(blockGradBias[j]), gradOutputBuffer[j]);
     }    
   }
 }
@@ -564,8 +572,6 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
   
   float *blockGradWeight = gradWeight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
   float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-  float *blockGradBias = gradBias + outputIdx*outputSize;
-  float *blockBias = bias + outputIdx*outputSize;
   
   // update blockWeight and renorm
   for (int j=0; j<outputSize; j++)
@@ -576,9 +582,10 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
     buffer[tx] = 0;
     for (int i=tx; i<inputSize; i+=i_step)
     {
-      // update weights
+      // update weights and zero grad weight
       float w = rowWeight[i];
       w -= rowGradWeight[i]*lr;
+      rowGradWeight[i] = 0;
       // norm of row
       buffer[tx] += w*w;
       rowWeight[i] = w;
@@ -605,14 +612,9 @@ __global__ void cunnx_BlockSparse_updateParameters_kernel(
       }
     }
   }
-  
-  // update blockBias
-  for (int j=tx; j<outputSize; j+=i_step)
-  {
-    blockBias[j] -= blockGradBias[j]*lr;
-  }
-  
 }
+
+//TODO update and zero bias
 
 
 static int cunnx_BlockSparse_updateParameters(lua_State *L)
