@@ -1,5 +1,7 @@
-#define BLOCKSPARSE_THREADS 64
-#define BLOCKSPARSE_MAXBLOCKSIZE 64
+#define BLOCKSPARSE_THREADS 32
+#define BLOCKSPARSE_MAXBLOCKSIZE 300
+#define BLOCKSPARSE_MINBLOCKSIZE 32
+#define BLOCKSPARSE_MINBLOCKS 32
   
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *output, float *input, float *inputIndice, float *outputIndice, 
@@ -21,6 +23,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *outputScale_k = outputScale + k*outputWindowSize;
   
   // loop through blocks
+  #pragma unroll 32
   for (int m=0; m<outputWindowSize; m++)
   {
     int outputIdx = (int)outputIndice_k[m] - 1;
@@ -37,6 +40,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       outputBuffer[j] = blockBias[j];
     }
     
+    #pragma unroll 32
     for (int l=0; l<inputWindowSize; l++)
     {
       int inputIdx = (int)inputIndice_k[l] - 1;
@@ -49,6 +53,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
       
       // addmv (dot products)
+      #pragma unroll 32
       for (int j=0; j<outputSize; j++)
       {
         // zero buffer
@@ -61,7 +66,8 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         }
         
         // add (reduce)
-        for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+        #pragma unroll 32
+        for (unsigned int stride = BLOCKSPARSE_THREADS >> 1; stride > 0; stride >>= 1)
         {
           __syncthreads();
           if (tx < stride)

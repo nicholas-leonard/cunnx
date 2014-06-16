@@ -196,7 +196,7 @@ function BlockSparse:unpackInput(inputTable)
       outputIndice, outputScale = unpack(innerTable)
       inputIndice = self.inputIndice
       inputScale = self.inputScale
-   elseif self.nOutputBlock == 1 then
+   elseif self.nOutputBlock == 1 and not #inputTable == 2 then
       -- Sparse input, dense output:
       -- Input is a multi-table of 3 tensors: {activation, {inputIndice, inputScale}}
       -- Output is a tensor of activations.
@@ -210,7 +210,13 @@ function BlockSparse:unpackInput(inputTable)
       -- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
       input, innerTable = unpack(inputTable[1])
       inputIndice, inputScale = unpack(innerTable)
-      outputIndice, outputScale = unpack(inputTable[2])
+      if self.nOutputBlock > 1 then
+         outputIndice, outputScale = unpack(inputTable[2])
+      else 
+         -- for gaters
+         outputIndice = self.outputIndice
+         outputScale = self.outputScale
+      end
    end 
    return input, inputIndice, outputIndice, inputScale, outputScale
 end

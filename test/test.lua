@@ -184,7 +184,7 @@ function cunnxtest.BlockSparse()
       end
    end 
    
-   mytester:assertTensorEq(gradInput[exampleIdx]:float(), gradInput2, precision_backward, 'error on state (backward sparse gradInput)')
+   mytester:assertTensorEq(gradInput[exampleIdx]:float(), gradInput2, precision_backward*10, 'error on state (backward sparse gradInput)')
    
    for j=1,outputWindowSize do
       local gradOutput_j = gradOutput2[j]
@@ -239,13 +239,13 @@ function cunnxtest.BlockSparse()
 end
    
 function cunnxtest.BlockSparse_benchmark()
-   local nInputBlock = 128
-   local nOutputBlock = 128
-   local inputSize = 64
-   local outputSize = 64
-   local inputWindowSize = 8
-   local outputWindowSize = 8
-   local batchSize = 512
+   local nInputBlock = 300
+   local nOutputBlock = 300
+   local inputSize = 32
+   local outputSize = 32
+   local inputWindowSize = 2
+   local outputWindowSize = 2
+   local batchSize = 256
    local lr = 0.1
    
    local tm, tm2 = {}, {}
@@ -272,23 +272,34 @@ function cunnxtest.BlockSparse_benchmark()
    bs:zeroGradParameters()
    bs:forward(inputTable)
    
+   local gater = nn.BlockSparse(nInputBlock, inputSize, 1, nOutputBlock)
+   gater:cuda()
+   gradOutputGater = torch.randn(batchSize, nOutputBlock):cuda()
+   
    cutorch.synchronize()
    local a = torch.Timer()
    for i=1,nloop do
-      --bs:zeroGradParameters(true)
+      --gater
+      gater:zeroGradParameters(true)
+      gater:forward(inputTable)
+      gater:backward(inputTable, gradOutputGater)
+      gater:updateParameters(lr, true)
+      --experts
+      bs:zeroGradParameters(true)
       local outputTable = bs:forward(inputTable)
-      --local output = outputTable[1]
+      local output = outputTable[1]
       --bs:updateGradInput(inputTable, gradOutputTable)
       --bs:accGradParameters(inputTable, gradOutputTable)
-      --local gradInputTable = bs:backward(inputTable, gradOutputTable)
-      
-      --local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
-      --bs:updateParameters(lr, true) -- also zeros grad parameters
+      local gradInputTable = bs:backward(inputTable, gradOutputTable)      
+      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      bs:updateParameters(lr, true) -- also zeros grad parameters
    end
    cutorch.synchronize()
    tm.gpu = a:time().real
    tm2.gpu = a:time().real
    print("BlockSparse time :", tm.gpu)
+   bs = nil
+   collectgarbage()
    
    local mlp = nn.Linear(nInputBlock*inputSize, nOutputBlock*outputSize)
    mlp:cuda()
@@ -297,11 +308,11 @@ function cunnxtest.BlockSparse_benchmark()
    mlp:forward(input3)
    a:reset()
    for i=1,nloop do
-      --mlp:zeroGradParameters()
+      mlp:zeroGradParameters()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      --mlp:backward(input3, gradOutput3)
+      mlp:backward(input3, gradOutput3)
       mlp:updateParameters(lr)
       mlp.weight:renorm(2, 1, 1)
    end
@@ -315,11 +326,11 @@ function cunnxtest.BlockSparse_benchmark()
    mlp:forward(input3)
    a:reset()
    for i=1,nloop do
-      --mlp:zeroGradParameters()
+      mlp:zeroGradParameters()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      --mlp:backward(input3, gradOutput3)
+      mlp:backward(input3, gradOutput3)
       mlp:updateParameters(lr)
       mlp.weight:renorm(2, 1, 1)
    end
@@ -402,5 +413,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'BlockSparse_dense', 'BlockSparse', 'BlockSparse_benchmark'})
+nn.testcudax() 
 
