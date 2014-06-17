@@ -401,6 +401,17 @@ function cunnxtest.BlockSparse_dense()
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
 end
 
+function cunnxtest.Sort()
+   local batchSize = 8
+   local nInput = 12
+   local dim = 2
+   local s = nn.Sort(dim)
+   local input = torch.randn(batchSize, nInput)
+   local output = s:forward(input)
+   local gradInput = s:backward(input, output)
+   mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward)')
+end
+
 
 function nn.testcudax(tests)
    math.randomseed(os.time())
