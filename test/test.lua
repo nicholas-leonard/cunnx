@@ -243,8 +243,8 @@ function cunnxtest.BlockSparse_benchmark()
    local nOutputBlock = 300
    local inputSize = 32
    local outputSize = 32
-   local inputWindowSize = 2
-   local outputWindowSize = 2
+   local inputWindowSize = 8
+   local outputWindowSize = 8
    local batchSize = 256
    local lr = 0.1
    
@@ -290,11 +290,12 @@ function cunnxtest.BlockSparse_benchmark()
       local output = outputTable[1]
       --bs:updateGradInput(inputTable, gradOutputTable)
       --bs:accGradParameters(inputTable, gradOutputTable)
-      local gradInputTable = bs:backward(inputTable, gradOutputTable)      
+      local gradInputTable = bs:backward(inputTable, gradOutputTable)  
       local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
       bs:updateParameters(lr, true) -- also zeros grad parameters
    end
    cutorch.synchronize()
+   
    tm.gpu = a:time().real
    tm2.gpu = a:time().real
    print("BlockSparse time :", tm.gpu)

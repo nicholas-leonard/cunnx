@@ -1,5 +1,5 @@
 #define BLOCKSPARSE_THREADS 32
-#define BLOCKSPARSE_MAXBLOCKSIZE 300
+#define BLOCKSPARSE_MAXBLOCKSIZE 512
 #define BLOCKSPARSE_MINBLOCKSIZE 32
 #define BLOCKSPARSE_MINBLOCKS 32
   
@@ -23,7 +23,6 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *outputScale_k = outputScale + k*outputWindowSize;
   
   // loop through blocks
-  #pragma unroll 32
   for (int m=0; m<outputWindowSize; m++)
   {
     int outputIdx = (int)outputIndice_k[m] - 1;
@@ -40,7 +39,6 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       outputBuffer[j] = blockBias[j];
     }
     
-    #pragma unroll 32
     for (int l=0; l<inputWindowSize; l++)
     {
       int inputIdx = (int)inputIndice_k[l] - 1;
@@ -66,7 +64,6 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
         }
         
         // add (reduce)
-        #pragma unroll 32
         for (unsigned int stride = BLOCKSPARSE_THREADS >> 1; stride > 0; stride >>= 1)
         {
           __syncthreads();
@@ -559,56 +556,58 @@ static int cunnx_BlockSparse_accGradParameters(lua_State *L)
 
 __global__ void cunnx_BlockSparse_updateParameters_kernel(
   float *weight, float *bias, float *gradWeight, float *gradBias, 
-  float *paramUpdateCuda, float lr, float maxnorm,
+  float *paramUpdateCuda, float lr, float maxnorm, int nUpdate,
   int inputSize, int outputSize, int nInputBlock, int nOutputBlock)
 {
   __shared__ float buffer[BLOCKSPARSE_THREADS];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
-  int k = blockIdx.x;
-  
-  int inputIdx = (int)paramUpdateCuda[k];
-  int outputIdx = (int)paramUpdateCuda[gridDim.x + k];
-  
-  float *blockGradWeight = gradWeight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-  float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
   
   // update blockWeight and renorm
-  for (int j=0; j<outputSize; j++)
+  for (int k=blockIdx.x; k<nUpdate; k+=gridDim.x)
   {
-    float *rowWeight = blockWeight + j*inputSize;  
-    float *rowGradWeight = blockGradWeight + j*inputSize;    
+    int inputIdx = (int)paramUpdateCuda[k];
+    int outputIdx = (int)paramUpdateCuda[gridDim.x + k];
     
-    buffer[tx] = 0;
-    for (int i=tx; i<inputSize; i+=i_step)
-    {
-      // update weights and zero grad weight
-      float w = rowWeight[i];
-      w -= rowGradWeight[i]*lr;
-      rowGradWeight[i] = 0;
-      // norm of row
-      buffer[tx] += w*w;
-      rowWeight[i] = w;
-    }
+    float *blockGradWeight = gradWeight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
+    float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
     
-    // add (reduce)
-    for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+    for (int j=0; j<outputSize; j++)
     {
-      __syncthreads();
-      if (tx < stride)
-        buffer[tx] += buffer[tx+stride];
-    }
-    
-    // clip norms
-    __syncthreads();
-    float norm = sqrt(buffer[0]);
-    if (norm > maxnorm) 
-    {
-      norm = maxnorm / (norm + 1e-7);
-      // renormalize
+      float *rowWeight = blockWeight + j*inputSize;  
+      float *rowGradWeight = blockGradWeight + j*inputSize;    
+      
+      buffer[tx] = 0;
       for (int i=tx; i<inputSize; i+=i_step)
       {
-        rowWeight[i] *= norm;
+        // update weights and zero grad weight
+        float w = rowWeight[i];
+        w -= rowGradWeight[i]*lr;
+        rowGradWeight[i] = 0;
+        // norm of row
+        buffer[tx] += w*w;
+        rowWeight[i] = w;
+      }
+      
+      // add (reduce)
+      for (unsigned int stride = blockDim.x >> 1; stride > 0; stride >>= 1)
+      {
+        __syncthreads();
+        if (tx < stride)
+          buffer[tx] += buffer[tx+stride];
+      }
+      
+      // clip norms
+      __syncthreads();
+      float norm = sqrt(buffer[0]);
+      if (norm > maxnorm) 
+      {
+        norm = maxnorm / (norm + 1e-7);
+        // renormalize
+        for (int i=tx; i<inputSize; i+=i_step)
+        {
+          rowWeight[i] *= norm;
+        }
       }
     }
   }
@@ -697,19 +696,19 @@ static int cunnx_BlockSparse_updateParameters(lua_State *L)
   THCudaTensor_copyInt(paramUpdateCuda, paramUpdateHost);
   
   /* call cudakernel */
-  dim3 blocks(n); // each cuda block is a param block to be updated
+  dim3 blocks(min(65535,n)); // each cuda block is a param block to be updated
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateParameters_kernel<<<blocks,threads>>>(
     THCudaTensor_data(weight), THCudaTensor_data(bias), 
     THCudaTensor_data(gradWeight), THCudaTensor_data(gradBias), 
-    THCudaTensor_data(paramUpdateCuda), lr, maxnorm,
+    THCudaTensor_data(paramUpdateCuda), lr, maxnorm, n,
     inputSize, outputSize, nInputBlock, nOutputBlock
   );
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
-
+  
   return 0;
 }
   
