@@ -5,85 +5,6 @@
 #define WINDOWSPARSE_STREAMS 8
 
 
-void THCudaTensor_addmvB(THCudaTensor *output, float beta, float alpha, THCudaTensor *mat, THCudaTensor *vec, THLongTensor *inIdx, THLongTensor *outIdx)
-{
-  THCudaTensor* output_, *weight_, *_weight_, *input_;
-  int inputSize, outputSize, batchSize;
-  
-  if( (mat->nDimension != 2) || (vec->nDimension != 2) || (output->nDimension != 2) )
-    THError("matrices expected");
-
-  if( mat->size[1] != vec->size[1] )
-    THError("output size mismatch");
-
-  if( output->size[1] > mat->size[0] )
-    THError("input size mismatch");
-  
-  if( (output->size[0] != vec->size[0]) || (output->size[0] != inIdx->size[0]) || (output->size[0] != outIdx->size[0]) )
-    THError("batch size mismatch");
-    
-  cublasStatus_t stat;
-  cublasHandle_t handle;
-  stat = cublasCreate(&handle);
-  if (stat != CUBLAS_STATUS_SUCCESS) 
-    THError("CUBLAS initialization failed");
-     
-  cudaStream_t streams[CUTORCH_STREAMS];
-  
-  for (int i=0; i<CUTORCH_STREAMS; i++)
-  {
-    if (cudaStreamCreate(&streams[i]) != cudaSuccess)
-      THError("error initializing stream");
-  }
-    
-  output_ = THCudaTensor_new();
-  weight_ = THCudaTensor_new();
-  _weight_ = THCudaTensor_new();
-  input_ = THCudaTensor_new();
-  
-  batchSize = vec->size[0];
-  inputSize = vec->size[1];
-  outputSize = output->size[1];
-
-  for (int i=0; i<batchSize; i++)
-  {
-    int inputIdx, outputIdx;
-    cublasSetStream(handle, streams[i%CUTORCH_STREAMS]);
-    
-    inputIdx = THIntTensor_get1d(inIdx, i);
-    outputIdx = THIntTensor_get1d(outIdx, i);
-    
-    THCudaTensor_select(output_, output, 0, i);
-    THCudaTensor_select(input_, vec, 0, i);
-    THCudaTensor_narrow(_weight_, mat, 0, inputIdx, inputSize);
-    THCudaTensor_narrow(weight_, _weight_, 1, outputIdx, outputSize);
-    
-    if(weight_->stride[0] == 1)
-    {
-      cublasSgemv(handle, CUBLAS_OP_N, weight_->size[0], weight_->size[1],
-                  &alpha, (const float*)THCudaTensor_data(weight_), weight_->stride[1],
-                  (const float*)THCudaTensor_data(input_), input_->stride[0],
-                  &beta, THCudaTensor_data(output_), output_->stride[0]);
-    }
-    else if(weight_->stride[1] == 1)
-    {
-      cublasSgemv(handle, CUBLAS_OP_T,  weight_->size[1], weight_->size[0],
-                  &alpha, (const float*)THCudaTensor_data(weight_), weight_->stride[0],
-                  (const float*)THCudaTensor_data(input_), input_->stride[0],
-                  &beta, THCudaTensor_data(output_), output_->stride[0]);
-    }
-    else
-    {
-      THError("expecting matrix with at least one contiguous dimension");
-    }
-  }
-
-  cublasSetStream(handle, NULL);
-  cublasDestroy(handle);
-  THCublasCheck();  
-}
-
-
 static int cunnx_WindowSparse_updateOutput(lua_State *L)
 { 
   /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput*/
@@ -109,6 +30,12 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
   
+  THCudaTensor* output_, *weight_, *_weight_, *input_;
+  
+  cublasStatus_t stat;
+  cublasHandle_t handle;
+  cudaStream_t streams[WINDOWSPARSE_STREAMS];
+  
   luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 2, 3, "2D(batch mode) tensor expected");
@@ -118,20 +45,11 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, inputSize <= WINDOWSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
   luaL_argcheck(L, outputSize <= WINDOWSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
   
-  // expect contiguous inputs
-  
   THCudaTensor_resize2d(output, input->size[0], outputSize);
-  
-  THCudaTensor_addmvB(output, 0, 1, weight, input, inputIndice, outputIndice);
-  THCudaTensor* output_, *weight_, *_weight_, *input_;
     
-  cublasStatus_t stat;
-  cublasHandle_t handle;
   stat = cublasCreate(&handle);
   if (stat != CUBLAS_STATUS_SUCCESS) 
     THError("CUBLAS initialization failed");
-     
-  cudaStream_t streams[WINDOWSPARSE_STREAMS];
   
   for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
   {
