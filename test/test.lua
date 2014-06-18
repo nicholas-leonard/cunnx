@@ -403,7 +403,7 @@ end
 
 function cunnxtest.Sort()
    local batchSize = 8
-   local nInput = 12
+   local nInput = 5
    local dim = 2
    local s = nn.Sort(dim)
    local input = torch.randn(batchSize, nInput)
