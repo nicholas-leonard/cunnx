@@ -404,9 +404,13 @@ end
 function cunnxtest.WindowSparse_benchmark()
    local inputSize = 10000
    local outputSize = 10000
-   local inputWindowSize = 512
-   local outputWindowSize = 512
-   local batchSize = 128
+   local inputWindowSize = 256
+   local outputWindowSize = 256
+   local batchSize = 256
+   --speedup is 
+   -- 10k/512/128: 21.96073282818, 0.17082863699821
+   -- 10k/512/256: 21.98, 0.105
+   -- 10k/256/256: 40.68, 0.0944
    local lr = 0.1
    
    local input = torch.randn(batchSize,inputWindowSize):cuda()
@@ -426,8 +430,9 @@ function cunnxtest.WindowSparse_benchmark()
    ws:cuda()
    
    ws:forward(inputTable)
-   local tm = {}
+   local tm, tm2 = {}, {}
    times['BlockSparse vs full dense'] = tm
+   times['BlockSparse vs partial dense'] = tm2
    
    cutorch.synchronize()
    local a = torch.Timer()
@@ -445,6 +450,7 @@ function cunnxtest.WindowSparse_benchmark()
    cutorch.synchronize()
    
    tm.gpu = a:time().real
+   tm2.gpu = a:time().real
    print("WindowSparse time :", tm.gpu)
    ws = nil
    collectgarbage()
@@ -467,6 +473,23 @@ function cunnxtest.WindowSparse_benchmark()
    cutorch.synchronize()
    tm.cpu = a:time().real
    
+   mlp = nn.Linear(inputWindowSize, outputWindowSize)
+   mlp:cuda()
+   input3 = torch.randn(batchSize, inputWindowSize):cuda()
+   gradOutput3 = torch.randn(batchSize, outputWindowSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      --mlp:zeroGradParameters()
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
+      --mlp:updateParameters(lr)
+      --mlp.weight:renorm(2, 1, 1)
+   end
+   cutorch.synchronize()
+   tm2.cpu = a:time().real
 end
 
 function cunnxtest.Sort()
