@@ -32,4 +32,11 @@ function Sort:updateGradInput(input, gradOutput)
    return self.gradInput
 end
 
+function Sort:type(type)
+   assert(type ~= 'torch.CudaType', "torch.CudaType not supported")
+   self._output = self._output:type(type)
+   self.gradInput = self.gradInput:type(type)
+   self.output = {self._output, self.indice}
+end
+
 

@@ -409,7 +409,12 @@ function cunnxtest.Sort()
    local input = torch.randn(batchSize, nInput)
    local output = s:forward(input)
    local gradInput = s:backward(input, output)
-   mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward)')
+   mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward float)')
+   s:double()
+   input = torch.randn(batchSize, nInput):double()
+   output = s:forward(input)
+   gradInput = s:backward(input, output)
+   mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward double)')
 end
 
 
