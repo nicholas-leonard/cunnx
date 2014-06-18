@@ -10,7 +10,8 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha)
    
    -- larger alpha means putting more weights on contemporary value 
    -- when calculating the moving average mean
-   self.alpha = alpha or 0.1 
+   self.alpha = alpha or 0.1
+   self.first_batch = true 
    
    self.threshold = torch.zeros(self.output:size(2))
    self.mean_sparsity = torch.zeros(self.output:size(2))
@@ -20,12 +21,17 @@ end
 function NoisyReLU:updateOutput(input)
    input.nn.NoisyReLU_updateOutput(self, input)
    
-   -- find the internal sparsity of a batch output
+   -- find the training sparsity of a batch output
    sparsity = torch.gt(self.output > 0):sum(2):type('torch.FloatTensor'):div(self.output:size(2))
    sparsity:resize(self.output:size(2))
    
    -- recalculate mean sparsity, using exponential moving average   
-   self.mean_sparsity = self.alpha * sparsity + (1 - self.alpha) * self.mean_sparsity
+   if self.first_batch then
+      self.mean_sparsity = sparsity
+      self.first_batch = false
+   else
+      self.mean_sparsity = self.alpha * sparsity + (1 - self.alpha) * self.mean_sparsity
+   end
    
    -- update threshold, raise the threshold if the training sparsity is larger than the desired sparsity
    self.threshold = self.threshold + self.threshold_lr * (self.mean_sparsity - self.sparsityFactor)
