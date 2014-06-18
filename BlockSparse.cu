@@ -39,23 +39,22 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       outputBuffer[j] = blockBias[j];
     }
     
-    for (int l=0; l<inputWindowSize; l++)
+    // addmv (dot products)
+    for (int j=0; j<outputSize; j++)
     {
-      int inputIdx = (int)inputIndice_k[l] - 1;
-      float inputScale = inputScale_k[l];
-      
-      if (inputScale <= 0) // break on non-positive scale. 
-        break;
-      
-      float *blockInput = input_k + l*inputSize;
-      float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-      
-      // addmv (dot products)
-      #pragma unroll 32
-      for (int j=0; j<outputSize; j++)
+      // zero buffer
+      buffer[tx] = 0;
+    
+      for (int l=0; l<inputWindowSize; l++)
       {
-        // zero buffer
-        buffer[tx] = 0;
+        int inputIdx = (int)inputIndice_k[l] - 1;
+        float inputScale = inputScale_k[l];
+        
+        if (inputScale <= 0) // break on non-positive scale. 
+          break;
+        
+        float *blockInput = input_k + l*inputSize;
+        float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;     
         
         // multiply
         for (int i=tx; i<inputSize; i+=i_step)
@@ -63,19 +62,18 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
           buffer[tx] += inputScale*blockInput[i]*blockWeight[j*inputSize + i];
         }
         
-        // add (reduce)
-        for (unsigned int stride = BLOCKSPARSE_THREADS >> 1; stride > 0; stride >>= 1)
-        {
-          __syncthreads();
-          if (tx < stride)
-            buffer[tx] += buffer[tx+stride];
-        }
-        
-        if (tx == 0)
-        {
-          outputBuffer[j] += buffer[0];
-        }
-        
+      }
+      // add (reduce)
+      for (unsigned int stride = BLOCKSPARSE_THREADS >> 1; stride > 0; stride >>= 1)
+      {
+        __syncthreads();
+        if (tx < stride)
+          buffer[tx] += buffer[tx+stride];
+      }
+      
+      if (tx == 0)
+      {
+        outputBuffer[j] += buffer[0];
       }
       
     }
