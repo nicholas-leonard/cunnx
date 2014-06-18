@@ -74,10 +74,9 @@ static const struct luaL_Reg cunnx_NoisyReLU__ [] = {
   {NULL, NULL}
 };
 
-static void cunnx_Threshold_init(lua_State *L)
+static void cunnx_NoisyReLU_init(lua_State *L)
 {
   luaT_pushmetatable(L, "torch.CudaTensor");
   luaT_registeratname(L, cunnx_NoisyReLU__, "nn");
   lua_pop(L,1);
 }
-
