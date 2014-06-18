@@ -6,11 +6,25 @@ local WindowSparse, parent = torch.class('nn.WindowSparse', 'nn.Module')
 -- Weights are organized as a matrix of blocks.
 ------------------------------------------------------------------------
 
-function WindowSparse:__init(inputSize, outputSize, maxNorm)
+-- 3 modes
+-- Dense input, sparse output:
+-- The input and outputs are each a table of 3 tensors: {activation, {indice, scales}}
+WindowSparse.DENSE_SPARSE = 1
+-- Sparse input, dense output:
+-- Input is a multi-table of 3 tensors: {activation, {inputIndice, inputScale}}
+-- Output is a tensor of activations.
+WindowSparse.SPARSE_DENSE = 2
+-- Sparse input, sparse output:
+-- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
+-- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
+WindowSparse.SPARSE_SPARSE = 3
+
+function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    parent.__init(self)
    self.inputSize = inputSize
    self.outputSize = outputSize
    self.maxNorm = maxNorm or 1
+   self.mode = mode or self.SPARSE_SPARSE
    
    self.weight = torch.Tensor(outputSize, inputSize)
    self.bias = torch.Tensor(outputSize)
@@ -97,33 +111,25 @@ WindowSparse.sharedAccUpdateGradParameters = WindowSparse.accUpdateGradParameter
 function WindowSparse:unpackInput(inputTable)
    local input, inputIndice, outputIndice, inputScale, outputScale, innerTable
    -- 3 possible use cases
-   if self.nInputBlock == 1 then
-      -- Dense input, sparse output:
-      -- The input and outputs are each a table of 3 tensors: {activation, {indice, scales}}
+   if self.mode == self.DENSE_SPARSE then
       input, innerTable = unpack(inputTable)
       outputIndice, outputScale = unpack(innerTable)
       inputIndice = self.inputIndice
       inputScale = self.inputScale
-   elseif self.nOutputBlock == 1 and not #inputTable == 2 then
-      -- Sparse input, dense output:
-      -- Input is a multi-table of 3 tensors: {activation, {inputIndice, inputScale}}
-      -- Output is a tensor of activations.
+   elseif self.mode == self.SPARSE_DENSE and not #inputTable == 2 then
       input, innerTable = unpack(inputTable)
       inputIndice, inputScale = unpack(innerTable)
       outputIndice = self.outputIndice
       outputScale = self.outputScale
    else
-      -- Sparse input, sparse output:
-      -- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
-      -- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
       input, innerTable = unpack(inputTable[1])
       inputIndice, inputScale = unpack(innerTable)
-      if self.nOutputBlock > 1 then
-         outputIndice, outputScale = unpack(inputTable[2])
-      else 
+      if self.mode == self.SPARSE_DENSE then
          -- for gaters
          outputIndice = self.outputIndice
          outputScale = self.outputScale
+      else 
+         outputIndice, outputScale = unpack(inputTable[2])
       end
    end 
    return input, inputIndice, outputIndice, inputScale, outputScale
@@ -131,13 +137,10 @@ end
 
 function WindowSparse:unpackGradOutput(gradOutputTable)
    local gradOutput
-   -- 3 possible use cases
-   if self.nInputBlock == 1 then 
-      -- Dense input, sparse output:
+   if self.mode == self.DENSE_SPARSE then 
       -- gradOutput is a table of 3 tensors: {activation, {indices, scales}}
       gradOutput = gradOutputTable[1]
    elseif self.nOutputBlock == 1 then 
-      -- Sparse input, dense output:
       -- gradOutput is a tensor of activations.
       gradOutput = gradOutputTable
    else -- Sparse input, sparse output:
@@ -149,19 +152,15 @@ end
 
 function WindowSparse:packGradInput(outputIndice, gradInput, gradOutputScale)
    local gradInputTable = self.gradInput
-   -- 3 possible use cases
-   if self.nInputBlock == 1 then
-      -- Dense input, sparse output:
+   if self.mode == self.DENSE_SPARSE then
       -- Input is a table of 3 tensors: {activation, {indices, scales}}
       gradInputTable[1] = gradInput
       gradInputTable[2] = {outputIndice, gradOutputScale}
-   elseif self.nOutputBlock == 1 then
-      -- Sparse input, dense output:
+   elseif self.mode == self.SPARSE_DENSE then
       -- Input is a multi-table of 3 tensors: {activation, {indices, scales}}
       gradInputTable[1] = gradInput
       gradInputTable[2] = {outputIndice, gradOutputScale}
    else
-      -- Sparse input, sparse output:
       -- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
       gradInputTable[1] = {gradInput}
       gradInputTable[2] = {outputIndice, gradOutputScale}
@@ -171,16 +170,13 @@ end
 function WindowSparse:packOutput(output, outputIndice, outputScale)
    local outputTable
    -- 3 possible use cases
-   if self.nInputBlock == 1 then
-      -- Dense input, sparse output:
+   if self.mode == self.DENSE_SPARSE then
       -- output is a table of 3 tensors: {activation, {indices, scales}}
       outputTable = {output, {outputIndice, outputScale}}
-   elseif self.nOutputBlock == 1 then
-      -- Sparse input, dense output:
+   elseif self.mode == self.SPARSE_DENSE then
       -- output is a tensor of activations.
       outputTable = output
    else
-      -- Sparse input, sparse output:
       -- output is a multi-table of 3 tensors: {activation, {indices, scales}}
       outputTable = {output, {outputIndice, outputScale}}
    end 

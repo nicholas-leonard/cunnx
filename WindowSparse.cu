@@ -13,13 +13,12 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   THLongTensor *inputIndice = (THLongTensor*)luaT_checkudata(L, 3, "torch.LongTensor");
   THCudaTensor *inputScale = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
   // batchSize x outputWindowSize
-  THLongTensor *outputIndice = (THIntTensor*)luaT_checkudata(L, 4, "torch.LongTensor");
+  THLongTensor *outputIndice = (THLongTensor*)luaT_checkudata(L, 4, "torch.LongTensor");
   THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
   
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
-  int batchSize = input->size[0];
-  int windowSize = input->size[1];
+  int batchSize, inputWindowSize, outputWindowSize;
   
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
@@ -34,14 +33,18 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   cublasHandle_t handle;
   cudaStream_t streams[WINDOWSPARSE_STREAMS];
   
-  luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
-  luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, input->size[1] <= inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 1, 4, "1D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
   
-  THCudaTensor_resize2d(output, input->size[0], outputSize);
+  batchSize = input->size[0];
+  inputWindowSize = input->size[1];
+  outputWindowSize = outputScale->size[1];
+  
+  THCudaTensor_resize2d(output, input->size[0], outputScale->size[1]);
     
   stat = cublasCreate(&handle);
   if (stat != CUBLAS_STATUS_SUCCESS) 
@@ -62,15 +65,17 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   for (int i=0; i<batchSize; i++)
   {
     int inputIdx, outputIdx;
-    cublasSetStream(handle, streams[i%CUTORCH_STREAMS]);
+    float alpha = 1;
+    float beta = 0;
+    cublasSetStream(handle, streams[i%WINDOWSPARSE_STREAMS]);
     
-    inputIdx = THIntTensor_get1d(inIdx, i);
-    outputIdx = THIntTensor_get1d(outIdx, i);
+    inputIdx = THLongTensor_get1d(inputIndice, i);
+    outputIdx = THLongTensor_get1d(outputIndice, i);
     
     THCudaTensor_select(output_, output, 0, i);
     THCudaTensor_select(input_, input, 0, i);
-    THCudaTensor_narrow(_weight_, weight, 0, inputIdx, inputSize);
-    THCudaTensor_narrow(weight_, _weight_, 1, outputIdx, outputSize);
+    THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
+    THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
     
     if(weight_->stride[0] == 1)
     {
@@ -96,6 +101,11 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   cublasDestroy(handle);
   THCublasCheck();  
   
+  for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
+  {
+    if (cudaStreamDestroy(streams[i]) != cudaSuccess)
+      THError("error destroying stream");
+  }
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)

@@ -26,6 +26,7 @@ int luaopen_libcunnx(lua_State *L)
   
   cunnx_SoftMaxTree_init(L);
   cunnx_BlockSparse_init(L);
+  cunnx_WindowSparse_init(L);
 
   return 1;
 }
