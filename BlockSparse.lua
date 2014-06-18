@@ -33,7 +33,6 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, ma
    self.inputScaleHost = torch.FloatTensor()
    self.outputScaleHost = torch.FloatTensor()
    self.paramUpdateHost = torch.IntTensor()
-   self.paramUpdateCuda = torch.CudaTensor()
    
    -- for backward
    self.gradOutputScale = torch.Tensor()
@@ -172,6 +171,9 @@ function BlockSparse:type(type)
       self.inputScale = self.inputScale:type(type)  
       self.outputScale = self.outputScale:type(type) 
       self.gradOutputScale = self.gradOutputScale:type(type) 
+      if type == 'torch.CudaTensor' then
+         self.paramUpdateCuda = torch.CudaTensor()
+      end
    end
    return self
 end
@@ -180,7 +182,6 @@ end
 -- without wasting memory
 function BlockSparse:sharedClone()
    error"NotImplemented"
-   return smt:share(self, 'weight', 'bias')
 end
 
 -- we do not need to accumulate parameters when sharing

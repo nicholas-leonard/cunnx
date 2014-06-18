@@ -243,8 +243,8 @@ function cunnxtest.BlockSparse_benchmark()
    local nOutputBlock = 300
    local inputSize = 32
    local outputSize = 32
-   local inputWindowSize = 2
-   local outputWindowSize = 2
+   local inputWindowSize = 8
+   local outputWindowSize = 8
    local batchSize = 256
    local lr = 0.1
    
@@ -290,11 +290,12 @@ function cunnxtest.BlockSparse_benchmark()
       local output = outputTable[1]
       --bs:updateGradInput(inputTable, gradOutputTable)
       --bs:accGradParameters(inputTable, gradOutputTable)
-      local gradInputTable = bs:backward(inputTable, gradOutputTable)      
+      local gradInputTable = bs:backward(inputTable, gradOutputTable)  
       local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
       bs:updateParameters(lr, true) -- also zeros grad parameters
    end
    cutorch.synchronize()
+   
    tm.gpu = a:time().real
    tm2.gpu = a:time().real
    print("BlockSparse time :", tm.gpu)
@@ -398,6 +399,17 @@ function cunnxtest.BlockSparse_dense()
    mytester:assertTensorEq(gradInput:float():resize(batchSize, inputWindowSize*inputSize), gradInput2, precision_backward*10, 'error on state (backward dense) ')
    mytester:assertTensorEq(bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.weight, precision_backward*10, 'error on state (update weight dense) ')
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
+end
+
+function cunnxtest.Sort()
+   local batchSize = 8
+   local nInput = 5
+   local dim = 2
+   local s = nn.Sort(dim)
+   local input = torch.randn(batchSize, nInput)
+   local output = s:forward(input)
+   local gradInput = s:backward(input, output)
+   mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward)')
 end
 
 
