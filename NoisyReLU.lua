@@ -16,8 +16,8 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha, std)
    self.alpha = alpha or 0.01
    self.first_batch = true 
    
-   self.threshold = torch.zeros(self.output:size(2))
-   self.mean_sparsity = torch.zeros(self.output:size(2))
+   self.threshold = torch.Tensor()
+   self.mean_sparsity = torch.Tensor()
    self.val = 0
 end
 
@@ -27,6 +27,10 @@ function NoisyReLU:updateOutput(input)
    -- noise is switch on during training 
    if self.std > 0 then
       noise = noise:normal(0, self.std)
+   end
+   
+   if self.first_batch then
+      self.threshold = torch.zeros(input:size(2))
    end
 
    input = input + noise
@@ -49,7 +53,7 @@ function NoisyReLU:updateOutput(input)
       self.mean_sparsity = self.alpha * sparsity + (1 - self.alpha) * self.mean_sparsity
    end
    
-   -- update threshold, raise the threshold if the training sparsity is larger than the desired sparsity
+   -- update threshold, raise the threshold if the training activeness is larger than the desired activeness
    self.threshold = self.threshold + self.threshold_lr * (self.mean_sparsity - self.sparsityFactor)
    
    return self.output
