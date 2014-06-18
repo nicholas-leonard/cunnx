@@ -6,3 +6,4 @@ require "libcunnx"
 
 torch.include('cunnx', 'BlockSparse.lua')
 torch.include('cunnx', 'Sort.lua')
+torch.include('cunnx', 'WindowSparse.lua')
