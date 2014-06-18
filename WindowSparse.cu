@@ -1,7 +1,6 @@
 #define WINDOWSPARSE_THREADS 128
 #define WINDOWSPARSE_MAXBLOCKSIZE 512
 #define WINDOWSPARSE_MINBLOCKSIZE 32
-#define WINDOWSPARSE_MINBLOCKS 32
 #define WINDOWSPARSE_STREAMS 8
 
 
@@ -19,9 +18,8 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
-  int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
-  int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
   int batchSize = input->size[0];
+  int windowSize = input->size[1];
   
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
@@ -38,12 +36,10 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   
   luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
-  luaL_argcheck(L, inputIndice->nDimension == 2, 3, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
+  luaL_argcheck(L, outputIndice->nDimension == 1, 4, "1D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, inputSize <= WINDOWSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
-  luaL_argcheck(L, outputSize <= WINDOWSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
   
   THCudaTensor_resize2d(output, input->size[0], outputSize);
     

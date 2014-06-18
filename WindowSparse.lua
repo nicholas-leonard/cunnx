@@ -37,8 +37,8 @@ end
 function WindowSparse:updateOutput(inputTable)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
    if batchSize ~= input:size(1) then
-      self.inputIndice:resize(input:size(1),1):fill(1)
-      self.outputIndice:resize(input:size(1),1):fill(1)
+      self.inputIndice:resize(input:size(1)):fill(1)
+      self.outputIndice:resize(input:size(1)):fill(1)
       self.inputScale:resize(input:size(1),1):fill(1)
       self.outputScale:resize(input:size(1),1):fill(1)
       self.batchSize = input:size(1)
