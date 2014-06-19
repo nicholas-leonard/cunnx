@@ -57,6 +57,9 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    self.gradOutputScale = torch.Tensor()
    self._gradInput = torch.Tensor()
    self.gradInput = {}
+   
+   -- used for cmul(outputScale, output)
+   self.cumtable = nn.CMulTable()
 
    self.batchSize = 0
    
@@ -102,9 +105,9 @@ function WindowSparse:accGradParameters(inputTable, gradOutputTable, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
    local gradOutput = self:unpackGradOutput(gradOutputTable)
    scale = scale or 1
-   input.nn.WindowSparse_accGradParameters(
+   --[[input.nn.WindowSparse_accGradParameters(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
-   )
+   )--]]
    self.zeroed = false
 end
 
@@ -120,6 +123,7 @@ function WindowSparse:type(type)
       self.inputScale = self.inputScale:type(type)  
       self.outputScale = self.outputScale:type(type) 
       self.gradOutputScale = self.gradOutputScale:type(type) 
+      self.cmultable:type(type)
    end
    return self
 end
