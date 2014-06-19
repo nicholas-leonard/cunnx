@@ -59,7 +59,7 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    self.gradInput = {}
    
    -- used for cmul(outputScale, output)
-   self.cumtable = nn.CMulTable()
+   self.cmultable = nn.CMulTable()
 
    self.batchSize = 0
    
@@ -94,7 +94,7 @@ end
 function WindowSparse:updateGradInput(inputTable, gradOutputTable)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
    local gradOutput = self:unpackGradOutput(gradOutputTable)
-   local gradInput, gradOutputScale = input.nn.WindowSparse_updateGradInput(
+   local gradInput = input.nn.WindowSparse_updateGradInput(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput
    )
    self:packGradInput(outputIndice, gradInput, gradOutputScale)

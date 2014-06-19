@@ -3,7 +3,7 @@ require 'cunn'
 require 'nnx'
 require 'cunnx'
 
---cutorch.setDevice(2)
+cutorch.setDevice(2)
 
 local cunnxtest = {}
 local precision_forward = 1e-6
@@ -402,11 +402,11 @@ function cunnxtest.BlockSparse_dense()
 end
 
 function cunnxtest.WindowSparse()
-   local inputSize = 1000
-   local outputSize = 1000
-   local inputWindowSize = 128
-   local outputWindowSize = 128
-   local batchSize = 32
+   local inputSize = 100
+   local outputSize = 100
+   local inputWindowSize = 8
+   local outputWindowSize = 8
+   local batchSize = 5
    local lr = 0.1
    
    -- windowSparse
@@ -426,38 +426,50 @@ function cunnxtest.WindowSparse()
    local ws = nn.WindowSparse(inputSize, outputSize)
    ws:cuda()
    local cutoff = math.sqrt(inputWindowSize*outputWindowSize)
-   ws.batchedGemmMax = cutoff - 1
+   ws.batchedGemmMax = cutoff + 10
    
    local message = {'batched', 'streamed'}
+   
+   local input2 = torch.zeros(batchSize, inputSize):cuda()
+   local gradOutput2 = torch.zeros(batchSize, outputSize):cuda()
+      
+   for i=1,batchSize do
+      local inputIdx = inputIndice[i]
+      input2[i]:narrow(1, inputIdx, inputWindowSize):copy(input[i])
+      local outputIdx = outputIndice[i]
+      gradOutput2[i]:narrow(1, outputIdx, outputWindowSize):copy(gradOutput[i])
+   end
+   
+   local mlp = nn.Linear(inputSize, outputSize)
+   mlp:cuda()
+   mlp.weight = ws.weight:clone()
+   mlp.bias = ws.bias:clone()
+   
    -- linear
    for i=1,2 do
-      local input2 = torch.zeros(batchSize, inputSize):cuda()
-      
-      for i=1,batchSize do
-         local inputIdx = inputIndice[i]
-         input2[i]:narrow(1, inputIdx, inputWindowSize):copy(input[i])
-      end
-      
-      local mlp = nn.Linear(inputSize, outputSize)
-      mlp:cuda()
-      mlp.weight = ws.weight:clone()
-      mlp.bias = ws.bias:clone()
-      
       -- compare
       local outputTable = ws:forward(inputTable)
       local output = outputTable[1]
+      local gradInputTable = ws:backward(inputTable, gradOutputTable)
+      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
       
       local output2 = mlp:forward(input2)
-   
+      local gradInput2 = mlp:backward(input2, gradOutput2)
+      
       local output3 = torch.zeros(batchSize, outputWindowSize)
+      local gradInput3 = torch.zeros(batchSize, inputWindowSize)
       
       for i=1,batchSize do
          local outputIdx = outputIndice[i]
          output3[i]:copy(output2[i]:narrow(1, outputIdx, outputWindowSize))
+         local inputIdx = inputIndice[i]
+         gradInput3[i]:copy(gradInput2[i]:narrow(1, inputIdx, inputWindowSize))
       end
       
       mytester:assertTensorEq(output3:float(), output:float(), 0.0001, 'error on state (forward)'..message[i])
-      ws.batchedGemmMax = cutoff + 1
+      mytester:assertTensorEq(gradInput3:float(), gradInput:float(), 0.0001, 'error on state (backward)'..message[i])
+      ws.batchedGemmMax = cutoff - 10
+      
    end
 end
 
@@ -507,8 +519,8 @@ function cunnxtest.WindowSparse_benchmark()
       local output = outputTable[1]
       --bs:updateGradInput(inputTable, gradOutputTable)
       --bs:accGradParameters(inputTable, gradOutputTable)
-      --local gradInputTable = bs:backward(inputTable, gradOutputTable)  
-      --local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      local gradInputTable = ws:backward(inputTable, gradOutputTable)  
+      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
       --bs:updateParameters(lr, true) -- also zeros grad parameters
    end
    cutorch.synchronize()
@@ -530,7 +542,7 @@ function cunnxtest.WindowSparse_benchmark()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      --mlp:backward(input3, gradOutput3)
+      mlp:backward(input3, gradOutput3)
       --mlp:updateParameters(lr)
       --mlp.weight:renorm(2, 1, 1)
    end
@@ -548,7 +560,7 @@ function cunnxtest.WindowSparse_benchmark()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      --mlp:backward(input3, gradOutput3)
+      mlp:backward(input3, gradOutput3)
       --mlp:updateParameters(lr)
       --mlp.weight:renorm(2, 1, 1)
    end
@@ -585,5 +597,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'WindowSparse'}) --, 'WindowSparse_benchmark'}) 
+nn.testcudax({'WindowSparse', 'WindowSparse_benchmark'}) 
 
