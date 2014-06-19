@@ -3,7 +3,7 @@ require 'cunn'
 require 'nnx'
 require 'cunnx'
 
-cutorch.setDevice(2)
+--cutorch.setDevice(2)
 
 local cunnxtest = {}
 local precision_forward = 1e-6
@@ -401,6 +401,66 @@ function cunnxtest.BlockSparse_dense()
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
 end
 
+function cunnxtest.WindowSparse()
+   local inputSize = 1000
+   local outputSize = 1000
+   local inputWindowSize = 128
+   local outputWindowSize = 128
+   local batchSize = 32
+   local lr = 0.1
+   
+   -- windowSparse
+   local input = torch.randn(batchSize,inputWindowSize):cuda()
+   local gradOutput = torch.randn(batchSize,outputWindowSize):cuda()
+   local inputIndice = torch.randperm(inputSize-inputWindowSize):narrow(1,1,batchSize):long()
+   local outputIndice = torch.randperm(outputSize-outputWindowSize):narrow(1,1,batchSize):long()
+   
+   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScale:fill(1)
+   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScale:fill(1)   
+   local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
+   
+   local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
+   
+   local ws = nn.WindowSparse(inputSize, outputSize)
+   ws:cuda()
+   local cutoff = math.sqrt(inputWindowSize*outputWindowSize)
+   ws.batchedGemmMax = cutoff - 1
+   
+   local message = {'batched', 'streamed'}
+   -- linear
+   for i=1,2 do
+      local input2 = torch.zeros(batchSize, inputSize):cuda()
+      
+      for i=1,batchSize do
+         local inputIdx = inputIndice[i]
+         input2[i]:narrow(1, inputIdx, inputWindowSize):copy(input[i])
+      end
+      
+      local mlp = nn.Linear(inputSize, outputSize)
+      mlp:cuda()
+      mlp.weight = ws.weight:clone()
+      mlp.bias = ws.bias:clone()
+      
+      -- compare
+      local outputTable = ws:forward(inputTable)
+      local output = outputTable[1]
+      
+      local output2 = mlp:forward(input2)
+   
+      local output3 = torch.zeros(batchSize, outputWindowSize)
+      
+      for i=1,batchSize do
+         local outputIdx = outputIndice[i]
+         output3[i]:copy(output2[i]:narrow(1, outputIdx, outputWindowSize))
+      end
+      
+      mytester:assertTensorEq(output3:float(), output:float(), 0.0001, 'error on state (forward)'..message[i])
+      ws.batchedGemmMax = cutoff + 1
+   end
+end
+
 function cunnxtest.WindowSparse_benchmark()
    local inputSize = 10000
    local outputSize = 10000
@@ -431,6 +491,7 @@ function cunnxtest.WindowSparse_benchmark()
    
    local ws = nn.WindowSparse(inputSize, outputSize)
    ws:cuda()
+   ws.batchedGemmMax = 200
    
    ws:forward(inputTable)
    local tm, tm2 = {}, {}
@@ -524,5 +585,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'WindowSparse_benchmark'}) 
+nn.testcudax({'WindowSparse'}) --, 'WindowSparse_benchmark'}) 
 

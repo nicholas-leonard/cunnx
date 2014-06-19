@@ -41,9 +41,12 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    -- for cuda
    self.inputHost = torch.CharTensor()
    self.weightHost = torch.CharTensor()
+   self.biasHost = torch.CharTensor()
    self.outputHost = torch.CharTensor()
+   
    self.inputCuda = torch.CudaTensor()
    self.weightCuda = torch.CudaTensor()
+   self.biasCuda = torch.CudaTensor()
    self.outputCuda = torch.CudaTensor()
    
    -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
@@ -58,6 +61,16 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    self.batchSize = 0
    
    self:reset()
+end
+
+function WindowSparse:reset(stdv)
+   if stdv then
+      stdv = stdv * math.sqrt(3)
+   else
+      stdv = 1./math.sqrt(self.weight:size(2))
+   end
+   self.weight:uniform(-stdv, stdv)
+   self.bias:uniform(-stdv, stdv)
 end
 
 function WindowSparse:updateOutput(inputTable)
