@@ -38,6 +38,18 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    self.inputScale = torch.Tensor()
    self.outputScale = torch.Tensor()
    
+   -- for cuda
+   self.inputHost = torch.CharTensor()
+   self.weightHost = torch.CharTensor()
+   self.outputHost = torch.CharTensor()
+   self.inputCuda = torch.CudaTensor()
+   self.weightCuda = torch.CudaTensor()
+   self.outputCuda = torch.CudaTensor()
+   
+   -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
+   -- cublasSgemmBatched
+   self.batchedGemmMax = 200
+   
    -- for backward
    self.gradOutputScale = torch.Tensor()
    self._gradInput = torch.Tensor()

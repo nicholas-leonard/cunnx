@@ -3,7 +3,7 @@
 #define WINDOWSPARSE_MINBLOCKSIZE 32
 #define WINDOWSPARSE_STREAMS 8
 
-
+  
 static int cunnx_WindowSparse_updateOutput(lua_State *L)
 { 
   /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput*/
@@ -16,6 +16,7 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   THLongTensor *outputIndice = (THLongTensor*)luaT_checkudata(L, 4, "torch.LongTensor");
   THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
   
+  int batchedGemmMax = luaT_getfieldcheckint(L, 1, "batchedGemmMax");
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
   int batchSize, inputWindowSize, outputWindowSize;
@@ -33,6 +34,9 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   cublasHandle_t handle;
   cudaStream_t streams[WINDOWSPARSE_STREAMS];
   
+  float alpha = 1;
+  float beta = 0;
+  
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] <= inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
@@ -49,63 +53,134 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   stat = cublasCreate(&handle);
   if (stat != CUBLAS_STATUS_SUCCESS) 
     THError("CUBLAS initialization failed");
-  
-  for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
-  {
-    if (cudaStreamCreate(&streams[i]) != cudaSuccess)
-      THError("error initializing stream");
-  }
     
   output_ = THCudaTensor_new();
   weight_ = THCudaTensor_new();
   _weight_ = THCudaTensor_new();
   input_ = THCudaTensor_new();
   
-
-  for (int i=0; i<batchSize; i++)
+  if (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax)
   {
-    int inputIdx, outputIdx;
-    float alpha = 1;
-    float beta = 0;
-    cublasSetStream(handle, streams[i%WINDOWSPARSE_STREAMS]);
-    
-    inputIdx = THLongTensor_get1d(inputIndice, i);
-    outputIdx = THLongTensor_get1d(outputIndice, i);
-    
-    THCudaTensor_select(output_, output, 0, i);
-    THCudaTensor_select(input_, input, 0, i);
-    THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
-    THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
-    
-    if(weight_->stride[0] == 1)
+    for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
     {
-      cublasSgemv(handle, CUBLAS_OP_N, weight_->size[0], weight_->size[1],
-                  &alpha, (const float*)THCudaTensor_data(weight_), weight_->stride[1],
-                  (const float*)THCudaTensor_data(input_), input_->stride[0],
-                  &beta, THCudaTensor_data(output_), output_->stride[0]);
+      if (cudaStreamCreate(&streams[i]) != cudaSuccess)
+        THError("error initializing stream");
     }
-    else if(weight_->stride[1] == 1)
+  
+    for (int i=0; i<batchSize; i++)
     {
-      cublasSgemv(handle, CUBLAS_OP_T,  weight_->size[1], weight_->size[0],
-                  &alpha, (const float*)THCudaTensor_data(weight_), weight_->stride[0],
-                  (const float*)THCudaTensor_data(input_), input_->stride[0],
-                  &beta, THCudaTensor_data(output_), output_->stride[0]);
+      int inputIdx, outputIdx;
+  
+      cublasSetStream(handle, streams[i%WINDOWSPARSE_STREAMS]);
+      
+      inputIdx = THLongTensor_get1d(inputIndice, i);
+      outputIdx = THLongTensor_get1d(outputIndice, i);
+      
+      THCudaTensor_select(output_, output, 0, i);
+      THCudaTensor_select(input_, input, 0, i);
+      THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
+      THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
+      
+      if(weight_->stride[0] == 1)
+      {
+        stat = cublasSgemv(handle, CUBLAS_OP_N, weight_->size[0], weight_->size[1],
+                          &alpha, (const float*)THCudaTensor_data(weight_), weight_->stride[1],
+                          (const float*)THCudaTensor_data(input_), input_->stride[0],
+                          &beta, THCudaTensor_data(output_), output_->stride[0]);
+      }
+      else if(weight_->stride[1] == 1)
+      {
+        stat = cublasSgemv(handle, CUBLAS_OP_T,  weight_->size[1], weight_->size[0],
+                          &alpha, (const float*)THCudaTensor_data(weight_), weight_->stride[0],
+                          (const float*)THCudaTensor_data(input_), input_->stride[0],
+                          &beta, THCudaTensor_data(output_), output_->stride[0]);
+      }
+      else
+      {
+        THError("expecting matrix with at least one contiguous dimension");
+      }
     }
-    else
+
+    cublasSetStream(handle, NULL);
+    THCublasCheck();  
+    
+    for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
     {
-      THError("expecting matrix with at least one contiguous dimension");
+      if (cudaStreamDestroy(streams[i]) != cudaSuccess)
+        THError("error destroying stream");
     }
   }
-
-  cublasSetStream(handle, NULL);
+  else
+  {  
+    THCharTensor *inputHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "inputHost", "torch.CharTensor");
+    THCharTensor *weightHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "weightHost", "torch.CharTensor");
+    THCharTensor *outputHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "outputHost", "torch.CharTensor");
+    
+    THCudaTensor *inputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "inputCuda", "torch.CudaTensor");
+    THCudaTensor *weightCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weightCuda", "torch.CudaTensor");
+    THCudaTensor *outputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputCuda", "torch.CudaTensor");
+    
+    THCharTensor_resize1d(inputHost, batchSize*sizeof(float*));
+    THCharTensor_resize1d(weightHost, batchSize*sizeof(float*));
+    THCharTensor_resize1d(outputHost, batchSize*sizeof(float*));
+    
+    THCudaTensor_resize1d(inputCuda, batchSize*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(weightCuda, batchSize*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(outputCuda, batchSize*sizeof(float*)/sizeof(float));
+    
+    const float **inputB = (const float **)THCharTensor_data(inputHost);
+    const float **weightB = (const float **)THCharTensor_data(weightHost);
+    float **outputB = (float **)THCharTensor_data(outputHost);
+    
+    const float **inputB_d = (const float **)THCudaTensor_data(inputCuda);
+    const float **weightB_d = (const float **)THCudaTensor_data(weightCuda);
+    float **outputB_d = (float **)THCudaTensor_data(outputCuda);
+    
+    for (int i=0; i<batchSize; i++)
+    {
+      int inputIdx, outputIdx;
+      
+      inputIdx = THLongTensor_get1d(inputIndice, i);
+      outputIdx = THLongTensor_get1d(outputIndice, i);
+      
+      THCudaTensor_select(output_, output, 0, i);
+      THCudaTensor_select(input_, input, 0, i);
+      THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
+      THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
+      
+      inputB[i] = THCudaTensor_data(input_);
+      weightB[i] = THCudaTensor_data(weight_);
+      outputB[i] = THCudaTensor_data(output_);
+    }
+    
+    if(cudaMemcpy(inputB_d, inputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    if(cudaMemcpy(weightB_d, weightB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    if(cudaMemcpy(outputB_d, outputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    
+                       
+    stat = cublasSgemmBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                             outputWindowSize, 1, inputWindowSize,
+                             &alpha, weightB_d, inputSize, 
+                             inputB_d, inputWindowSize, 
+                             &beta, outputB_d, outputWindowSize, 
+                             batchSize);
+    
+    if (stat != CUBLAS_STATUS_SUCCESS) 
+      THError("cublasSgemmBatched failed");
+    
+    
+  }
+  
   cublasDestroy(handle);
   THCublasCheck();  
   
-  for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
-  {
-    if (cudaStreamDestroy(streams[i]) != cudaSuccess)
-      THError("error destroying stream");
-  }
+  THCudaTensor_free(input_);
+  THCudaTensor_free(weight_);
+  THCudaTensor_free(_weight_);
+  THCudaTensor_free(output_);
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
