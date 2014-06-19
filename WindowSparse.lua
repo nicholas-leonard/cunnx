@@ -49,6 +49,9 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    self.biasCuda = torch.CudaTensor()
    self.outputCuda = torch.CudaTensor()
    
+   self.inputIndiceCuda = torch.CudaTensor()
+   self.outputIndiceCuda = torch.CudaTensor()
+   
    -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
    -- cublasSgemmBatched
    self.batchedGemmMax = 200
