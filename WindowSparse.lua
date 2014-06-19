@@ -108,10 +108,9 @@ function WindowSparse:accGradParameters(inputTable, gradOutputTable, scale)
    local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
    local gradOutput = self:unpackGradOutput(gradOutputTable)
    scale = scale or 1
-   --[[input.nn.WindowSparse_accGradParameters(
+   input.nn.WindowSparse_accGradParameters(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
-   )--]]
-   self.zeroed = false
+   )
 end
 
 function WindowSparse:type(type)

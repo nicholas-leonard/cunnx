@@ -3,8 +3,6 @@ require 'cunn'
 require 'nnx'
 require 'cunnx'
 
-cutorch.setDevice(2)
-
 local cunnxtest = {}
 local precision_forward = 1e-6
 local precision_backward = 1e-6
@@ -402,8 +400,8 @@ function cunnxtest.BlockSparse_dense()
 end
 
 function cunnxtest.WindowSparse()
-   local inputSize = 100
-   local outputSize = 100
+   local inputSize = 32
+   local outputSize = 32
    local inputWindowSize = 8
    local outputWindowSize = 8
    local batchSize = 5
@@ -430,6 +428,7 @@ function cunnxtest.WindowSparse()
    
    local message = {'batched', 'streamed'}
    
+   -- linear
    local input2 = torch.zeros(batchSize, inputSize):cuda()
    local gradOutput2 = torch.zeros(batchSize, outputSize):cuda()
       
@@ -445,9 +444,12 @@ function cunnxtest.WindowSparse()
    mlp.weight = ws.weight:clone()
    mlp.bias = ws.bias:clone()
    
-   -- linear
+   -- compare
+   
    for i=1,2 do
-      -- compare
+      mlp:zeroGradParameters()
+      ws:zeroGradParameters()
+      
       local outputTable = ws:forward(inputTable)
       local output = outputTable[1]
       local gradInputTable = ws:backward(inputTable, gradOutputTable)
@@ -467,9 +469,11 @@ function cunnxtest.WindowSparse()
       end
       
       mytester:assertTensorEq(output3:float(), output:float(), 0.0001, 'error on state (forward)'..message[i])
-      mytester:assertTensorEq(gradInput3:float(), gradInput:float(), 0.0001, 'error on state (backward)'..message[i])
+      mytester:assertTensorEq(gradInput3:float(), gradInput:float(), 0.0001, 'error on state (backward gradInput)'..message[i])
       ws.batchedGemmMax = cutoff - 10
       
+      mytester:assertTensorEq(ws.gradWeight:float(), mlp.gradWeight:float(), 0.0001, 'error on state (backward gradWeight)'..message[i])
+      mytester:assertTensorEq(ws.gradBias:float(), mlp.gradBias:float(), 0.0001, 'error on state (backward gradBias)'..message[i])
    end
 end
 
@@ -514,14 +518,16 @@ function cunnxtest.WindowSparse_benchmark()
    local a = torch.Timer()
    for i=1,nloop do
       --experts
-      --bs:zeroGradParameters(true)
+      --ws:zeroGradParameters()
       local outputTable = ws:forward(inputTable)
       local output = outputTable[1]
-      --bs:updateGradInput(inputTable, gradOutputTable)
-      --bs:accGradParameters(inputTable, gradOutputTable)
-      local gradInputTable = ws:backward(inputTable, gradOutputTable)  
+      local gradInputTable = ws:backwardUpdate(inputTable, gradOutputTable, lr)  
       local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
-      --bs:updateParameters(lr, true) -- also zeros grad parameters
+      --ws:updateGradInput(inputTable, gradOutputTable)
+      --ws:accGradParameters(inputTable, gradOutputTable, lr)
+      --local gradInputTable = ws:backward(inputTable, gradOutputTable)  
+      --local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      --ws:updateParameters(lr)
    end
    cutorch.synchronize()
    
@@ -542,7 +548,8 @@ function cunnxtest.WindowSparse_benchmark()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      mlp:backward(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, lr)
       --mlp:updateParameters(lr)
       --mlp.weight:renorm(2, 1, 1)
    end
@@ -560,7 +567,8 @@ function cunnxtest.WindowSparse_benchmark()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      mlp:backward(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, lr)
       --mlp:updateParameters(lr)
       --mlp.weight:renorm(2, 1, 1)
    end
@@ -584,6 +592,7 @@ function cunnxtest.Sort()
    mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward double)')
 end
 
+cutorch.setDevice(2)
 
 function nn.testcudax(tests)
    math.randomseed(os.time())

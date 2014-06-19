@@ -401,20 +401,18 @@ __global__ void cunnx_WindowSparse_accGradParameters_kernel(
   float *gradBias_k = gradBias + outputIdx;
 
   // addr weights (scalar-products)
-  for (int i=tx; i<inputSize; i+=i_step)
+  for (int i=tx; i<inputWindowSize; i+=i_step)
   {
     // copy input to buffer
     buffer[tx] = input_k[i]*scale;
   
     // multiply accumulate weights
-    for (int j=0; j<outputSize; j++)
+    for (int j=0; j<outputWindowSize; j++)
       atomicAdd(&(gradWeight_k[j*inputSize + i]), gradOutput_k[j]*buffer[tx]);
   }
-    
-  //__syncthreads(); // needed for some reason
   
   // cadd bias i.e. multiply accumulate biases
-  for (int j=tx; j<outputSize; j+=i_step)
+  for (int j=tx; j<outputWindowSize; j+=i_step)
     atomicAdd(&(gradBias_k[j]), gradOutput_k[j]*scale);
 }
 
