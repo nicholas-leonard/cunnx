@@ -592,7 +592,31 @@ function cunnxtest.Sort()
    mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward double)')
 end
 
-cutorch.setDevice(2)
+function cunnxtest.WindowGate()
+   -- outputWindowSize/outputSize == inputWindowSize/inputSize
+   local outputWindowSize = 24
+   local outputSize = 120
+   local inputSize = 20 
+   local inputWindowSize = 4
+   local batchSize = 3
+   
+   local input = torch.randn(batchSize, inputSize)
+   local wg = nn.WindowGate(outputWindowSize,outputSize,true)
+   local mlp = nn.Sequential()
+   mlp:add(nn.SoftMax())
+   mlp:add(wg)
+   
+   local output = mlp:forward(input)
+   
+   print("")
+   print("input")
+   print(input)
+   print("output")
+   print(output[1],output[2])
+   
+end
+
+--cutorch.setDevice(2)
 
 function nn.testcudax(tests)
    math.randomseed(os.time())
@@ -606,5 +630,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'WindowSparse', 'WindowSparse_benchmark'}) 
+nn.testcudax({'WindowGate'}) 
 
