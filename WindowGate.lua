@@ -5,11 +5,12 @@ local WindowGate, parent = torch.class('nn.WindowGate', 'nn.Module')
 -- TODO add gaussian jumps for robustness
 ------------------------------------------------------------------------
 
-function WindowGate:__init(outputWindowSize, outputSize, softmax)
+function WindowGate:__init(outputWindowSize, outputSize, softmax, gravity)
    parent.__init(self)
    self.outputWindowSize = outputWindowSize
    self.outputSize = outputSize
    self.softmax = softmax or true
+   self.gravity = gravity or 0
    
    self.outputIndice = torch.LongTensor()
    self.inputIndice = torch.LongTensor()
@@ -37,6 +38,10 @@ function WindowGate:updateOutput(input)
       self.inputIndice:resize(self.batchSize)
       self.outputIndice:resize(self.batchSize)
    end
+   if input.nn.WindowGate_updateOutput then
+      input.nn.WindowGate_updateOutput(input)
+      return self.output
+   end
    self.sum:cmul(self.range, input)
    -- get coordinate of centoid
    if self.softmax then
@@ -46,6 +51,7 @@ function WindowGate:updateOutput(input)
    end
    -- make centroids a number between 0 and 1
    self.centroid:div(input:size(2))
+   -- indices
    self._inputIndice:mul(self.centroid, input:size(2)):add(-self.inputWindowSize*0.5)
    self.inputIndice:copy(self._inputIndice)
    self._outputIndice:mul(self.centroid, self.outputSize):add(-self.outputWindowSize*0.5)
@@ -64,8 +70,21 @@ function WindowGate:updateOutput(input)
    return self.output
 end
 
-function WindowGate:updateGradInput(input, gradOutput)   
-   
+function WindowGate:updateGradInput(input, gradOutputTable)   
+   local gradOutput = gradOutputTable[1]
+   self.gradInput:resizeAs(input)
+   -- fill with default gradient for non-window inputs
+   self.gradInput:fill(self.gravity)
+   for i=1,self.batchSize do
+      -- reduce window
+      local gradInputWindow = self.gradInput[i]:narrow(1, self.inputIndice[i], self.inputWindowSize)
+      local gradOutputWindow = gradOutput[i]
+      local k = 1
+      for j=1,self.outputWindowSize,self.windowStride do
+         gradInputWindow[k] = gradOutputWindow:narrow(1, j, self.windowStride):sum()
+         k = k + 1
+      end
+   end
    return self.gradInput
 end
 
