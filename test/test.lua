@@ -480,11 +480,11 @@ end
 function cunnxtest.WindowSparse_benchmark()
    local inputSize = 10000
    local outputSize = 10000
-   local inputWindowSize = 128
-   local outputWindowSize = 128
-   local batchSize = 128
-   --speedup is 
-   -- streams + gemv                  vs gemmBatched
+   local inputWindowSize = 256
+   local outputWindowSize = 256
+   local batchSize = 512
+   --speedup is (forward only)
+   -- window/batch streams + gemv     vs gemmBatched
    -- 10k/512/128: 21.9607, 0.1708    vs 10.5454 0.0837
    -- 10k/512/256: 21.98, 0.105       vs 10.4632 0.05
    -- 10k/256/256: 40.68, 0.0944      vs 35.5428 0.0814
