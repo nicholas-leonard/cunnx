@@ -2,6 +2,14 @@ local WindowGate, parent = torch.class('nn.WindowGate', 'nn.Module')
 ------------------------------------------------------------------------
 --[[ WindowGate ]]--
 -- Returns a table of {scales, indices}
+-- Forward finds the centroid of the input (output of a softmax).
+-- Centroid is then uses as mu (mean) to generate a gaussian blur
+-- for the scales.
+-- The centroid is also used to position a window on the outputs.
+-- Backward generates a gradient for gaussian parameter mu, which is 
+-- then backwarded to the input.
+-- So in effect, this layer outputs a gaussian blur and training can 
+-- learn to move it around.
 -- TODO add gaussian jumps for robustness
 ------------------------------------------------------------------------
 
