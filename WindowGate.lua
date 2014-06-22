@@ -13,12 +13,14 @@ local WindowGate, parent = torch.class('nn.WindowGate', 'nn.Module')
 -- TODO add gaussian jumps for robustness
 ------------------------------------------------------------------------
 
-function WindowGate:__init(outputWindowSize, outputSize, softmax, gravity)
+function WindowGate:__init(outputWindowSize, outputSize, softmax, stdv)
    parent.__init(self)
    self.outputWindowSize = outputWindowSize
    self.outputSize = outputSize
    self.softmax = softmax or true
-   self.gravity = gravity or 0
+   self.stdv = stdv or outputWindowSize/2
+   self.a = 1/(self.stdv*math.sqrt(2*math.pi))
+   self.b = -1/(2*self.stdv*self.stdv)
    
    self.outputIndice = torch.LongTensor()
    self.inputIndice = torch.LongTensor()
@@ -103,3 +105,9 @@ function WindowGate:type(type)
    self.output = {self._output, self.indice}
 end
 
+function blur(mean, stdv, size)
+   local range = torch.range(1,size):float()
+   local a = 1/(stdv*math.sqrt(2*math.pi))
+   local b = -1/(2*stdv*stdv)
+   return range:add(-mean):pow(2):mul(b):exp():mul(a)
+end
