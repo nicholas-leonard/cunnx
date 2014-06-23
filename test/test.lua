@@ -511,8 +511,8 @@ function cunnxtest.WindowSparse_benchmark()
    
    ws:forward(inputTable)
    local tm, tm2 = {}, {}
-   times['BlockSparse vs full dense'] = tm
-   times['BlockSparse vs partial dense'] = tm2
+   times['WindowSparse vs full dense'] = tm
+   times['WindowSparse vs partial dense'] = tm2
    
    cutorch.synchronize()
    local a = torch.Timer()
@@ -625,7 +625,7 @@ function cunnxtest.WindowGate()
       local gradInput = wg:backward(input, {gradOutput, output[2]})  
    end
    cutorch.synchronize()
-   print("WindowGate time :"..a:time().real)
+   print("WindowGate time :", a:time().real)
 end
 
 --cutorch.setDevice(2)
