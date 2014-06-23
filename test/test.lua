@@ -626,6 +626,13 @@ function cunnxtest.WindowGate()
    end
    cutorch.synchronize()
    print("WindowGate time :", a:time().real)
+   
+   local function blur(mean, stdv, size)
+      local range = torch.range(1,size):float()
+      local a = 1/(stdv*math.sqrt(2*math.pi))
+      local b = -1/(2*stdv*stdv)
+      return range:add(-mean):pow(2):mul(b):exp():mul(a)
+   end
 end
 
 --cutorch.setDevice(2)

@@ -42,7 +42,7 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   THCharTensor *biasHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "inputHost", "torch.CharTensor");
   THCudaTensor *biasCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "inputCuda", "torch.CudaTensor");
   // batchSize x outputWindowSize
-  THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
+  THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   
   THCudaTensor* output_, *weight_, *_weight_, *bias_, *input_;
   
@@ -149,7 +149,7 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
     THCudaTensor *weightCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weightCuda", "torch.CudaTensor");
     THCudaTensor *outputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputCuda", "torch.CudaTensor");
     // put output back on top of the stack
-    output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
+    output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
     
     cublasSetStream(handle, NULL);
     
