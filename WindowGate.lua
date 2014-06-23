@@ -1,7 +1,7 @@
 local WindowGate, parent = torch.class('nn.WindowGate', 'nn.Module')
 ------------------------------------------------------------------------
 --[[ WindowGate ]]--
--- Returns a table of {scales, indices}
+-- Returns a table of {indices, scales}
 -- Forward finds the centroid of the input (output of a softmax).
 -- Centroid is then uses as mu (mean) to generate a gaussian blur
 -- for the scales.
@@ -30,7 +30,7 @@ function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, 
    self._output = torch.Tensor()
    self.centroid = torch.Tensor()
    self.error = torch.Tensor()
-   self.output = {self._output, self.outputIndice}
+   self.output = {self.outputIndice, self._output}
    self.batchSize = 0
    
 end
@@ -50,7 +50,7 @@ function WindowGate:updateOutput(input)
 end
 
 function WindowGate:updateGradInput(input, gradOutputTable)   
-   local gradOutput = gradOutputTable[1]
+   local gradOutput = gradOutputTable[2]
    return input.nn.WindowGate_updateGradInput(self, input, gradOutput)
 end
 
@@ -59,7 +59,7 @@ function WindowGate:type(type)
    self.gradInput = self.gradInput:type(type)
    self.centroid = self.centroid:type(type)
    self.error = self.error:type(type)
-   self.output = {self._output, self.outputIndice}
+   self.output = {self.outputIndice, self._output}
    if type == 'torch.CudaTensor' then
       self.outputIndiceCuda = torch.CudaTensor()
    end

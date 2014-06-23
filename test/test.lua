@@ -421,7 +421,7 @@ function cunnxtest.WindowSparse()
    
    local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    
-   local ws = nn.WindowSparse(inputSize, outputSize)
+   local ws = nn.WindowSparse(inputSize, outputSize, outputWindowSize)
    ws:cuda()
    local cutoff = math.sqrt(inputWindowSize*outputWindowSize)
    ws.batchedGemmMax = cutoff + 10
@@ -505,7 +505,7 @@ function cunnxtest.WindowSparse_benchmark()
    
    local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    
-   local ws = nn.WindowSparse(inputSize, outputSize)
+   local ws = nn.WindowSparse(inputSize, outputSize, outputWindowSize)
    ws:cuda()
    ws.batchedGemmMax = 200
    

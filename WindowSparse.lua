@@ -6,40 +6,23 @@ local WindowSparse, parent = torch.class('nn.WindowSparse', 'nn.Module')
 -- Weights are organized as a matrix of blocks.
 ------------------------------------------------------------------------
 
--- 3 modes
--- Dense input, sparse output:
--- The input and outputs are each a table of 3 tensors: {activation, {indice, scales}}
-WindowSparse.DENSE_SPARSE = 1
--- Sparse input, dense output:
--- Input is a multi-table of 3 tensors: {activation, {inputIndice, inputScale}}
--- Output is a tensor of activations.
-WindowSparse.SPARSE_DENSE = 2
--- Sparse input, sparse output:
--- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
--- Output is a multi-table of 3 tensors: {activation, {indices, scales}}
-WindowSparse.SPARSE_SPARSE = 3
-
-function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
+function WindowSparse:__init(inputSize, outputSize, outputWindowSize, accUpdate)
    parent.__init(self)
    self.inputSize = inputSize
    self.outputSize = outputSize
-   self.maxNorm = maxNorm or 1
-   self.mode = mode or self.SPARSE_SPARSE
+   self.outputWindowSize = outputWindowSize
+   self.accUpdate = accUpdate or false
    
    self._output = torch.Tensor()
-   self.output = (mode == self.SPARSE_DENSE) and self._output or {}
+   self.output = {}
    
    self.weight = torch.Tensor(outputSize, inputSize)
    self.bias = torch.Tensor(outputSize)
    
-   self.gradWeight = torch.Tensor(outputSize, inputSize):zero()
-   self.gradBias = torch.Tensor(outputSize):zero()
-   
-   -- for dense inputs or outputs
-   self.inputIndice = torch.LongTensor()
-   self.outputIndice = torch.LongTensor()
-   self.inputScale = torch.Tensor()
-   self.outputScale = torch.Tensor()
+   if not self.accUpdate then
+      self.gradWeight = torch.Tensor(outputSize, inputSize):zero()
+      self.gradBias = torch.Tensor(outputSize):zero()
+   end
    
    -- for cuda
    self.inputHost = torch.CharTensor()
@@ -63,9 +46,6 @@ function WindowSparse:__init(inputSize, outputSize, mode, maxNorm)
    self.gradOutputScale = torch.Tensor()
    self._gradInput = torch.Tensor()
    self.gradInput = {}
-   
-   -- used for cmul(outputScale, output)
-   self.cmultable = nn.CMulTable()
 
    self.batchSize = 0
    
@@ -83,52 +63,47 @@ function WindowSparse:reset(stdv)
 end
 
 function WindowSparse:updateOutput(inputTable)
-   local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
+   local input, inputIndice, outputIndice = unpack(inputTable)
    if batchSize ~= input:size(1) then
-      self.inputIndice:resize(input:size(1)):fill(1)
-      self.outputIndice:resize(input:size(1)):fill(1)
-      self.inputScale:resize(input:size(1),1):fill(1)
-      self.outputScale:resize(input:size(1),1):fill(1)
       self.batchSize = input:size(1)
    end
-   self._output = input.nn.WindowSparse_updateOutput(
-      self, input, inputIndice, outputIndice, inputScale, outputScale
-   )
-   return self:packOutput(output, outputIndice, outputScale)
+   --print("windowsparse", input, inputIndice, outputIndice, inputScale, outputScale)
+   self._output = input.nn.WindowSparse_updateOutput(self, input, inputIndice, outputIndice)
+   --print("output", self._output, self:packOutput(self._output, outputIndice, outputScale))
+   self.output[1] = self._output
+   self.output[2] = outputIndice
+   return self.output
 end
 
 function WindowSparse:updateGradInput(inputTable, gradOutputTable)
-   local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
-   local gradOutput, gradOutputScale = self:unpackGradOutput(gradOutputTable, outputScale)
-   local gradInput = input.nn.WindowSparse_updateGradInput(
-      self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput
-   )
-   self:packGradInput(outputIndice, gradInput, gradOutputScale)
+   local input, inputIndice, outputIndice = unpack(inputTable)
+   local gradOutput = gradOutputTable[1]
+   local gradInput = input.nn.WindowSparse_updateGradInput(self, input, inputIndice, outputIndice, gradOutput)
+   self.gradInput[1] = gradInput
    return self.gradInput
 end
 
 function WindowSparse:accGradParameters(inputTable, gradOutputTable, scale)
-   local input, inputIndice, outputIndice, inputScale, outputScale = self:unpackInput(inputTable)
-   local gradOutput = self:unpackGradOutput(gradOutputTable)
+   local input, inputIndice, outputIndice = unpack(inputTable)
+   local gradOutput = gradOutputTable[1]
    scale = scale or 1
-   input.nn.WindowSparse_accGradParameters(
-      self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
-   )
+   input.nn.WindowSparse_accGradParameters(self, input, inputIndice, outputIndice, gradOutput, scale)
 end
 
 function WindowSparse:type(type)
    if type and (type == 'torch.FloatTensor' or type == 'torch.DoubleTensor' or type == 'torch.CudaTensor') then
       self.weight = self.weight:type(type)
       self.bias = self.bias:type(type)
-      self.gradWeight = self.gradWeight:type(type)
-      self.gradBias = self.gradBias:type(type)
+      if not self.accUpdate then
+         self.gradWeight = self.gradWeight:type(type)
+         self.gradBias = self.gradBias:type(type)
+      end
       self._output = self._output:type(type)
       self._gradInput = self._gradInput:type(type)
    
       self.inputScale = self.inputScale:type(type)  
       self.outputScale = self.outputScale:type(type) 
       self.gradOutputScale = self.gradOutputScale:type(type) 
-      self.cmultable:type(type)
    end
    return self
 end
@@ -142,76 +117,3 @@ end
 -- we do not need to accumulate parameters when sharing
 WindowSparse.sharedAccUpdateGradParameters = WindowSparse.accUpdateGradParameters
 
-function WindowSparse:unpackInput(inputTable)
-   self.gradOutput = nil
-   self.gradOutputScale = nil
-   local input, inputIndice, outputIndice, inputScale, outputScale, innerTable
-   -- 3 possible use cases
-   if self.mode == self.DENSE_SPARSE then
-      input, innerTable = unpack(inputTable)
-      outputIndice, outputScale = unpack(innerTable)
-      inputIndice = self.inputIndice
-      inputScale = self.inputScale
-   elseif self.mode == self.SPARSE_DENSE and not #inputTable == 2 then
-      input, innerTable = unpack(inputTable)
-      inputIndice, inputScale = unpack(innerTable)
-      outputIndice = self.outputIndice
-      outputScale = self.outputScale
-   else
-      input, innerTable = unpack(inputTable[1])
-      inputIndice, inputScale = unpack(innerTable)
-      if self.mode == self.SPARSE_DENSE then
-         -- for gaters
-         outputIndice = self.outputIndice
-         outputScale = self.outputScale
-      else 
-         outputIndice, outputScale = unpack(inputTable[2])
-      end
-   end 
-   return input, inputIndice, outputIndice, inputScale, outputScale
-end
-
-function WindowSparse:unpackGradOutput(gradOutputTable, outputScale)
-   local gradOutput, gradOutputScale
-   if self.mode == self.DENSE_SPARSE or self.mode == self.SPARSE_SPARSE then 
-      -- gradOutput is a table of 3 tensors: {activation, {indices, scales}}
-      if self.gradOutput and self.gradOutputScale then
-         gradOutput, gradOutputScale = self.gradOutput, self.gradOutputScale
-      else
-         gradOutput, gradOutputScale = unpack(self.cmultable:backward({self._output, outputScale}, gradOutputTable[1]))
-      end
-   else 
-      -- gradOutput is a tensor of activations.
-      gradOutput = gradOutputTable
-   end 
-   self.gradOutput = gradOutput
-   self.gradOutputScale = gradOutputScale
-   return gradOutput, gradOutputScale
-end
-
-function WindowSparse:packGradInput(outputIndice, gradInput, gradOutputScale)
-   local gradInputTable = self.gradInput
-   if self.mode == self.DENSE_SPARSE then
-      -- Input is a table of 3 tensors: {activation, {indices, scales}}
-      gradInputTable[1] = gradInput
-      gradInputTable[2] = {outputIndice, gradOutputScale}
-   elseif self.mode == self.SPARSE_DENSE then
-      -- Input is a multi-table of 3 tensors: {activation, {indices, scales}}
-      gradInputTable[1] = gradInput
-      gradInputTable[2] = {outputIndice, gradOutputScale}
-   else
-      -- Input is a multi-table of 5 tensors: {{activation, {indices, scales}}, {indices, scales}}
-      gradInputTable[1] = {gradInput}
-      gradInputTable[2] = {outputIndice, gradOutputScale}
-   end 
-end
-
-function WindowSparse:packOutput(output, outputIndice, outputScale)
-   -- 3 possible use cases
-   if self.mode == self.DENSE_SPARSE or self.mode == self.SPARSE_SPARSE then
-      -- output is a multi-table of 3 tensors: {activation, {indices, scales}}
-      self.output[1] = self.cmultable:forward{output, outputScale}
-      self.output[2] = {outputIndice, outputScale}
-   end
-   return self.output
-end

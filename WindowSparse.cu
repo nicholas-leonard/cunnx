@@ -17,22 +17,18 @@ __global__ void cunnx_WindowSparse_copyBiasOutput_kernel(
   
 static int cunnx_WindowSparse_updateOutput(lua_State *L)
 { 
-  /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput*/
+  /* input, inputIndice, outputIndice, gradOutput*/
   // batchSize x inputWindowSize x inputSize
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   // batchSize
   THLongTensor *inputIndice = (THLongTensor*)luaT_checkudata(L, 3, "torch.LongTensor");
-  // batchSize x inputWindowSize
-  THCudaTensor *inputScale = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
-  // batchSize
   THLongTensor *outputIndice = (THLongTensor*)luaT_checkudata(L, 4, "torch.LongTensor");
-  // batchSize x outputWindowSize
-  THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
   
   int batchedGemmMax = luaT_getfieldcheckint(L, 1, "batchedGemmMax");
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
-  int batchSize, inputWindowSize, outputWindowSize;
+  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
+  int batchSize, inputWindowSize;
   
   // outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
@@ -56,14 +52,11 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, input->size[1] <= inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 1, 4, "1D(batch mode) tensor expected");
-  luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
   
   batchSize = input->size[0];
   inputWindowSize = input->size[1];
-  outputWindowSize = outputScale->size[1];
   
-  THCudaTensor_resize2d(output, input->size[0], outputScale->size[1]);
+  THCudaTensor_resize2d(output, input->size[0], outputWindowSize);
     
   stat = cublasCreate(&handle);
   if (stat != CUBLAS_STATUS_SUCCESS) 
@@ -221,18 +214,17 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
 
 static int cunnx_WindowSparse_updateGradInput(lua_State *L)
 { 
-  /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput*/
+  /* input, inputIndice, outputIndice, gradOutput*/
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   THLongTensor *inputIndice = (THLongTensor*)luaT_checkudata(L, 3, "torch.LongTensor");
-  THCudaTensor *inputScale = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
   THLongTensor *outputIndice = (THLongTensor*)luaT_checkudata(L, 4, "torch.LongTensor");
-  THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
-  THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 7, "torch.CudaTensor");
+  THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
   
   int batchedGemmMax = luaT_getfieldcheckint(L, 1, "batchedGemmMax");
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
-  int batchSize, inputWindowSize, outputWindowSize;
+  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
+  int batchSize, inputWindowSize;
   
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_gradInput", "torch.CudaTensor");
@@ -248,14 +240,11 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
   luaL_argcheck(L, input->size[1] <= inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 1, 4, "1D(batch mode) tensor expected");
-  luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
   
   THCudaTensor_resizeAs(gradInput, input); 
   
   batchSize = input->size[0];
   inputWindowSize = input->size[1];
-  outputWindowSize = outputScale->size[1];
     
   stat = cublasCreate(&handle);
   if (stat != CUBLAS_STATUS_SUCCESS) 
@@ -419,18 +408,17 @@ __global__ void cunnx_WindowSparse_accGradParameters_kernel(
 
 static int cunnx_WindowSparse_accGradParameters(lua_State *L)
 { 
-  /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale */
+  /* input, inputIndice, outputIndice, gradOutput, scale */
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   THLongTensor *inputIndice = (THLongTensor*)luaT_checkudata(L, 3, "torch.LongTensor");
-  THCudaTensor *inputScale = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
   THLongTensor *outputIndice = (THLongTensor*)luaT_checkudata(L, 4, "torch.LongTensor");
-  THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
-  THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 7, "torch.CudaTensor");
-  float scale = luaL_optnumber(L, 8, 1);
+  THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
+  float scale = luaL_optnumber(L, 6, 1);
   
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
-  int batchSize, inputWindowSize, outputWindowSize;
+  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
+  int batchSize, inputWindowSize;
   
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *gradWeight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradWeight", "torch.CudaTensor");
@@ -443,12 +431,9 @@ static int cunnx_WindowSparse_accGradParameters(lua_State *L)
   luaL_argcheck(L, input->size[1] <= inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 1, 4, "1D(batch mode) tensor expected");
-  luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
   
   batchSize = input->size[0];
   inputWindowSize = input->size[1];
-  outputWindowSize = outputScale->size[1];
   
   THCudaTensor_resize1d(inputIndiceCuda, batchSize);
   THCudaTensor_resize1d(outputIndiceCuda, batchSize);
