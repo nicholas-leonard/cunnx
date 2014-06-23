@@ -39,18 +39,19 @@ function WindowGate:updateOutput(input)
    assert(input:dim() == 2, "Only works with matrices")
    if self.batchSize ~= input:size(1) then
       self.batchSize = input:size(1)
+      self.inputSize = input:size(2)
       self.outputIndice:resize(self.batchSize)
       self.inputStdv = inputStdv or input:size(2)/2
       self.d = 1/(self.inputStdv*math.sqrt(2*math.pi))
       self.e = -1/(2*self.inputStdv*self.inputStdv)
    end
-   input.nn.WindowGate_updateOutput(input)
+   input.nn.WindowGate_updateOutput(self, input)
    return self.output
 end
 
 function WindowGate:updateGradInput(input, gradOutputTable)   
    local gradOutput = gradOutputTable[1]
-   return input.nn.WindowGate_updateGradInput(input, gradOutput)
+   return input.nn.WindowGate_updateGradInput(self, input, gradOutput)
 end
 
 function WindowGate:type(type)
@@ -58,7 +59,7 @@ function WindowGate:type(type)
    self.gradInput = self.gradInput:type(type)
    self.centroid = self.centroid:type(type)
    self.error = self.error:type(type)
-   self.output = {self._output, self.indice}
+   self.output = {self._output, self.outputIndice}
    if type == 'torch.CudaTensor' then
       self.outputIndiceCuda = torch.CudaTensor()
    end

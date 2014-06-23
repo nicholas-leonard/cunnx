@@ -594,17 +594,25 @@ end
 
 function cunnxtest.WindowGate()
    -- outputWindowSize/outputSize == inputWindowSize/inputSize
-   local outputWindowSize = 24
+   local outputWindowSize = 5
    local outputSize = 120
    local inputSize = 20 
-   local inputWindowSize = 4
+   local inputStdv = 2
+   local outputStdv = outputWindowSize/2
    local batchSize = 3
+   local lr = 0.1
    
-   local input = torch.randn(batchSize, inputSize)
-   local wg = nn.WindowGate(outputWindowSize,outputSize,true)
+   local input = torch.randn(batchSize, inputSize):cuda()
+   input = torch.zeros(batchSize, inputSize):cuda()
+   input[1][20] = 100000
+   input[2][1] = 100000
+   input[3][10] = 100000
+   input[3][11] = 100000
+   local wg = nn.WindowGate(outputWindowSize, outputSize, inputStdv, outputStdv, lr)
    local mlp = nn.Sequential()
    mlp:add(nn.SoftMax())
    mlp:add(wg)
+   mlp:cuda()
    
    local output = mlp:forward(input)
    

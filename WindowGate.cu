@@ -1,9 +1,9 @@
 #define WINDOWGATE_THREADS 128
 
 __global__ void cunnx_WindowGate_updateOutput_kernel(
-  float *output, float *centroids, float *outputIndiceCuda,
+  float *output, float *centroids, float *outputIndice,
   const float* input, int inputSize, int outputSize, 
-  int outputWindowSize, int windowStride, float a, float b)
+  int outputWindowSize, float a, float b)
 {
   __shared__ float buffer[WINDOWGATE_THREADS];
   unsigned int tx = threadIdx.x;
@@ -14,7 +14,7 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
   // get coordinate of centoid
   buffer[tx] = 0;
   for (unsigned int i=tx; i<inputSize; i+=blockDim.x)
-    buffer[tx] += (float)(i+1)*input_k[i];
+    buffer[tx] += input_k[i]*(float)i;
   
   // add (reduce)
   for (unsigned int stride = WINDOWGATE_THREADS >> 1; stride > 0; stride >>= 1)
@@ -29,21 +29,28 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     float centroid = buffer[0];
     
     // make centroid a number between 0 and 1
-    centroid /= inputSize;
+    centroid /= (float)(inputSize-1);
+    printf("%d, %f\n", k, centroid);
     
     // align centroid to output
-    centroid *= (float)outputSize;
+    centroid *= (float)(outputSize-1);
+    centroid += 1;
     
     float outputIdx = centroid - (float)outputWindowSize*0.5;
-
+    printf("A%d, %f %d %d, %f\n", k, centroid, inputSize, outputSize, outputIdx);
+    
     // clip indices
-    outputIdx = fminf(outputIdx, outputSize-outputWindowSize);
+    outputIdx = fminf(outputIdx, outputSize-outputWindowSize+1);
     outputIdx = fmaxf(outputIdx, 1);
     
-    // align centroid to outputWindow
-    centroid -= outputIdx;
+    printf("B%d, %f %d %d, %f\n", k, centroid, inputSize, outputSize, outputIdx);
     
-    outputIndiceCuda[k] = (int)outputIdx;
+    outputIdx = roundf(outputIdx);
+    // align centroid to outputWindow
+    centroid -= outputIdx-1;
+    
+    printf("%d, %f, %d\n", k, centroid, (int)outputIdx);
+    outputIndice[k] = (int)outputIdx;
     centroids[k] = centroid;
     buffer[0] = centroid;
   }
@@ -67,7 +74,6 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
   int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
-  int windowStride = luaT_getfieldcheckint(L, 1, "windowStride");
   int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
   float a = (float)luaT_getfieldchecknumber(L, 1, "a");
   float b = (float)luaT_getfieldchecknumber(L, 1, "b");
@@ -80,10 +86,11 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
   
-  THCudaTensor_resize1d(output, batchSize, outputWindowSize);
+  THCudaTensor_resize2d(output, batchSize, outputWindowSize);
   THCudaTensor_resize1d(outputIndiceCuda, batchSize);
   THLongTensor_resize1d(outputIndice, batchSize);
-    
+  THCudaTensor_resize1d(centroid, batchSize);
+  
   /* call cudakernel */
   dim3 blocks(batchSize); // each cuda-block is an example
   dim3 threads(WINDOWGATE_THREADS);
@@ -91,19 +98,19 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
     THCudaTensor_data(output), THCudaTensor_data(centroid), 
     THCudaTensor_data(outputIndiceCuda),
     (const float*)THCudaTensor_data(input), inputSize, outputSize,
-    outputWindowSize, windowStride
+    outputWindowSize, a, b
   );
   
   THLongTensor_copyCuda(outputIndice, outputIndiceCuda);
-
+  
   return 0;
 }
 
 __global__ void cunnx_WindowGate_updateGradInput_kernel(
   float *gradInput, float *error, const float *centroids,
-  const float *input, const float *outputIndiceCuda,
+  const float *input, const float *outputIndice,
   const float* output, const float* gradOutput, 
-  int inputSize, int outputSize, int outputWindowSize,, 
+  int inputSize, int outputSize, int outputWindowSize,
   float c, float d, float e, float lr)
 {
   __shared__ float buffer[WINDOWGATE_THREADS+1];
@@ -112,6 +119,7 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
   const float *gradOutput_k = gradOutput + outputWindowSize*k;
   const float *output_k = output + outputWindowSize*k;
   const float *input_k = input + inputSize*k;
+  float *gradInput_k = gradInput + inputSize*k;
   
   // get gradient of centroid
   buffer[tx] = 0;
@@ -174,14 +182,15 @@ static int cunnx_WindowGate_updateGradInput(lua_State *L)
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
   int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
-  int windowStride = luaT_getfieldcheckint(L, 1, "windowStride");
   int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
+  
   float c = (float)luaT_getfieldchecknumber(L, 1, "c");
   float d = (float)luaT_getfieldchecknumber(L, 1, "d");
   float e = (float)luaT_getfieldchecknumber(L, 1, "e");
   float lr = (float)luaT_getfieldchecknumber(L, 1, "lr");
   
   THCudaTensor *error = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "error", "torch.CudaTensor");
+  THCudaTensor *centroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "centroid", "torch.CudaTensor");
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   THCudaTensor *outputIndiceCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceCuda", "torch.CudaTensor");
   THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradInput", "torch.CudaTensor");
@@ -189,7 +198,7 @@ static int cunnx_WindowGate_updateGradInput(lua_State *L)
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
   
-  THCudaTensor_resize1d(gradInput, batchSize, inputSize);
+  THCudaTensor_resize2d(gradInput, batchSize, inputSize);
   THCudaTensor_resize1d(error, batchSize);
     
   /* call cudakernel */
@@ -197,7 +206,7 @@ static int cunnx_WindowGate_updateGradInput(lua_State *L)
   dim3 threads(WINDOWGATE_THREADS);
   cunnx_WindowGate_updateGradInput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradInput), THCudaTensor_data(error), 
-    (const float*)THCudaTensor_data(centroid)
+    (const float*)THCudaTensor_data(centroid),
     (const float*)THCudaTensor_data(input), 
     (const float*)THCudaTensor_data(outputIndiceCuda),
     (const float*)THCudaTensor_data(output), 
