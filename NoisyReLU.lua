@@ -56,7 +56,7 @@ function NoisyReLU:updateOutput(input)
    end
    
    if self.mode == 'train' then
-      noise = torch.zeros(input:size())
+      local noise = torch.zeros(input:size())
       -- noise is switch on during training 
       if self.std > 0 then
          noise = noise:normal(0, self.std)
@@ -97,7 +97,7 @@ function NoisyReLU:updateOutput(input)
    
    -- else in test mode
    else
-      activated = torch.Tensor()
+      local activated = torch.Tensor()
       activated:resizeAs(input)
       for i=1,input:size(1) do 
          activated[i] = torch.gt(input[i], self.threshold)
