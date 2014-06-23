@@ -603,11 +603,12 @@ function cunnxtest.WindowGate()
    local lr = 0.1
    
    local input = torch.randn(batchSize, inputSize):cuda()
-   input = torch.zeros(batchSize, inputSize):cuda()
-   input[1][20] = 100000
-   input[2][1] = 100000
-   input[3][10] = 100000
-   input[3][11] = 100000
+   --[[input = torch.zeros(batchSize, inputSize):cuda()
+   input[1][20] = 100
+   input[2][1] = 100
+   input[3][10] = 100
+   input[3][11] = 100--]]
+   local gradOutput = torch.randn(batchSize, outputWindowSize):cuda()
    local wg = nn.WindowGate(outputWindowSize, outputSize, inputStdv, outputStdv, lr)
    local mlp = nn.Sequential()
    mlp:add(nn.SoftMax())
@@ -615,13 +616,16 @@ function cunnxtest.WindowGate()
    mlp:cuda()
    
    local output = mlp:forward(input)
+   local gradInput = mlp:backward(input, {gradOutput, output[2]})   
    
-   print("")
-   print("input")
-   print(input)
-   print("output")
-   print(output[1],output[2])
-   
+   cutorch.synchronize()
+   local a = torch.Timer()
+   for i=1,nloop do
+      local output = wg:forward(input)
+      local gradInput = wg:backward(input, {gradOutput, output[2]})  
+   end
+   cutorch.synchronize()
+   print("WindowGate time :"..a:time().real)
 end
 
 --cutorch.setDevice(2)
@@ -638,5 +642,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'WindowGate'}) 
+nn.testcudax() 
 

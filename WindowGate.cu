@@ -30,26 +30,21 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     
     // make centroid a number between 0 and 1
     centroid /= (float)(inputSize-1);
-    printf("%d, %f\n", k, centroid);
     
     // align centroid to output
     centroid *= (float)(outputSize-1);
     centroid += 1;
     
     float outputIdx = centroid - (float)outputWindowSize*0.5;
-    printf("A%d, %f %d %d, %f\n", k, centroid, inputSize, outputSize, outputIdx);
     
     // clip indices
     outputIdx = fminf(outputIdx, outputSize-outputWindowSize+1);
     outputIdx = fmaxf(outputIdx, 1);
     
-    printf("B%d, %f %d %d, %f\n", k, centroid, inputSize, outputSize, outputIdx);
-    
     outputIdx = roundf(outputIdx);
     // align centroid to outputWindow
     centroid -= outputIdx-1;
     
-    printf("%d, %f, %d\n", k, centroid, (int)outputIdx);
     outputIndice[k] = (int)outputIdx;
     centroids[k] = centroid;
     buffer[0] = centroid;
@@ -140,9 +135,9 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
     float centroid = centroids[k];
     float gradCentroid = buffer[0]*c;
     centroid -= (lr*gradCentroid);
-    centroid += outputIdx;
-    centroid /= outputSize;
-    buffer[WINDOWGATE_THREADS] = centroid*inputSize;
+    centroid += outputIdx-1;
+    centroid /= (float)(outputSize-1);
+    buffer[WINDOWGATE_THREADS] = centroid*(float)(inputSize-1);
   }
   
   __syncthreads();
@@ -156,9 +151,9 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
     target = d*expf(target*target*e);
     float input = input_k[i];
     // dot product of logProbInput and probTarget (NLL)
-    buffer[i] -= logf(input)*target;
+    buffer[tx] -= logf(input + 0.0000001)*target;
     // grad input w.r.t. NLL
-    gradInput_k[i] = -target/input;
+    gradInput_k[i] = -target/(input + 0.0000001);
   }
   
   // add (reduce)
