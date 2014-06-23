@@ -27,7 +27,7 @@ require 'sys'
 
 local opt = lapp[[
    -s,--save          (default "logs")      subdirectory to save logs
-   -f,--full                    use the full dataset
+   -f,--full          (default full)         use the full dataset
    -o,--optimization  (default "SGD")       optimization: SGD 
    -r,--learningRate  (default 0.05)        learning rate, for SGD only
    -b,--batchSize     (default 200)          batch size
@@ -160,6 +160,9 @@ function train(dataset)
          -- reset gradients
          gradParameters:zero()
          
+         -- add noise to NoisyReLU
+         model.modules[3].std = xstd
+
          -- evaluate function for complete mini batch
          local outputs = model:forward(inputs)
          local f = criterion:forward(outputs, targets)
@@ -204,6 +207,7 @@ function train(dataset)
    print("<trainer> time to learn 1 sample = " .. (time*1000) .. 'ms')
 
    -- print confusion matrix
+   print("Train Set Result")
    print(confusion)
    trainLogger:add{['% mean class accuracy (train set)'] = confusion.totalValid * 100}
    confusion:zero()
@@ -238,7 +242,7 @@ function test(dataset)
          k = k + 1
       end
       
-      -- set NoisyReLU noise level to 0 during testing      
+      -- remove noise from NoisyReLU      
       model.modules[3].std = 0
       local preds = model:forward(inputs)
       
@@ -260,6 +264,7 @@ function test(dataset)
    print("<trainer> time to test 1 sample = " .. (time*1000) .. 'ms')
 
    -- print confusion matrix
+   print("Test Set Result")
    print(confusion)
    testLogger:add{['% mean class accuracy (test set)'] = confusion.totalValid * 100}
    confusion:zero()
