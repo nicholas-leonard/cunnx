@@ -593,10 +593,9 @@ function cunnxtest.Sort()
 end
 
 function cunnxtest.WindowGate()
-   -- outputWindowSize/outputSize == inputWindowSize/inputSize
    local outputWindowSize = 5
    local outputSize = 120
-   local inputSize = 20 
+   local inputSize = 7 
    local inputStdv = 2
    local outputStdv = outputWindowSize/2
    local batchSize = 3
@@ -616,7 +615,7 @@ function cunnxtest.WindowGate()
    wg:cuda()
    
    local output = wg:forward(input)
-   local gradInput = wg:backward(input, {gradOutput, output[2]})  
+   local gradInput = wg:backward(input, {output[2], gradOutput})  
    
    local function round(a)
       if (a - math.floor(a)) >= 0.5 then
@@ -630,14 +629,14 @@ function cunnxtest.WindowGate()
    local centroid = torch.cmul(input2, range):sum(2):select(2,1)
    centroid:div(input:size(2))
    centroid:mul(outputSize)
-   print(centroid)
+   
    outputIndice = torch.add(centroid, -outputWindowSize/2)
    for i=1,batchSize do
       outputIndice[i] = math.ceil(outputIndice[i])
    end
    outputIndice = outputIndice:long()
-   print(output[1], outputIndice)
    centroid:add(-outputIndice:float()):add(1)
+   
    mytester:assertTensorEq(output[1], outputIndice, 0.0000001)
    mytester:assertTensorEq(wg.centroid:float(), centroid, 0.0001)
    
@@ -652,8 +651,30 @@ function cunnxtest.WindowGate()
    for i=1,batchSize do
       output2[i]:copy(blur(centroid[i], outputStdv, outputWindowSize))
    end
-   print(centroid, output[2], output2)
+   
    mytester:assertTensorEq(output[2]:float(), output2, 0.00001)
+   
+   local gradOutput2 = gradOutput:float()
+   range = torch.repeatTensor(torch.range(1,outputWindowSize):float(),input:size(1),1)
+   range:add(centroid:clone():mul(-1):resize(batchSize, 1):expandAs(range))
+   gradOutput2:cmul(output2):cmul(range)
+   local gradCentroid = gradOutput2:sum(2)
+   gradCentroid:mul(1/(outputStdv*outputStdv))
+   gradCentroid:mul(-lr):add(centroid)
+   gradCentroid = gradCentroid:add(outputIndice:float()):add(-1):select(2,1)
+   gradCentroid:div(outputSize):mul(inputSize)
+   
+   local target = input2:clone()
+   for i=1,batchSize do
+      target[i]:copy(blur(gradCentroid[i], inputStdv, inputSize))
+   end
+   
+   local cr = nn.DistNLLCriterion{inputIsProbability=true,targetIsProbability=true}
+   local err = cr:forward(input2, target)
+   local gradInput2 = cr:backward(input2, target)
+   
+   mytester:assert(math.abs(err - wg.error:sum()) < 0.00001)
+   mytester:assertTensorEq(gradInput2, gradInput:float(), 0.0001)
    
    if true then return end
    cutorch.synchronize()
@@ -664,7 +685,6 @@ function cunnxtest.WindowGate()
    end
    cutorch.synchronize()
    print("WindowGate time :", a:time().real)
-   
    
 end
 
@@ -682,5 +702,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'WindowGate'})
+nn.testcudax()
 

@@ -257,7 +257,7 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
   gradInput_ = THCudaTensor_new();
   
 
-  if (false && (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax))
+  if (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax)
   {
     cudaStream_t streams[WINDOWSPARSE_STREAMS];
     

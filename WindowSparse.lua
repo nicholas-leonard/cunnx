@@ -3,7 +3,9 @@ local WindowSparse, parent = torch.class('nn.WindowSparse', 'nn.Module')
 --[[ WindowSparse ]]--
 -- Use for Distributed Conditional Computation
 -- Inputs and outputs are sparse
--- Weights are organized as a matrix of blocks.
+-- Weights are a dense matrix. Each example uses a small sub-matrix of
+-- this. 
+-- Note that this may fail for older cards.
 ------------------------------------------------------------------------
 
 function WindowSparse:__init(inputSize, outputSize, outputWindowSize, accUpdate)
@@ -39,7 +41,7 @@ function WindowSparse:__init(inputSize, outputSize, outputWindowSize, accUpdate)
    self.outputIndiceCuda = torch.CudaTensor()
    
    -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
-   -- cublasSgemmBatched
+   -- cublasSgemmBatched. If errors, set this to 100000
    self.batchedGemmMax = 200
    
    -- for backward

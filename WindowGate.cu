@@ -1,7 +1,7 @@
 #define WINDOWGATE_THREADS 128
 
 __global__ void cunnx_WindowGate_updateOutput_kernel(
-  float *output, float *centroids, float *outputIndice,
+  float *output, float *centroids, float *normalizedCentroids, float *outputIndice,
   const float *input, const float *noise, int inputSize, int outputSize, 
   int outputWindowSize, float a, float b)
 {
@@ -34,7 +34,7 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     
     // align centroid to output
     centroid *= (float)(outputSize);
-    printf("%d, %f\n", k, centroid);
+    normalizedCentroids[k] = centroid;
     
     float outputIdx = centroid - 0.5*(float)outputWindowSize;
     
@@ -42,9 +42,7 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     outputIdx = fminf(outputIdx, outputSize-outputWindowSize+1);
     outputIdx = fmaxf(outputIdx, 1);
     
-    printf("%d, %d, %d, %f \n", k, outputSize, outputWindowSize, outputIdx);
     outputIdx = ceilf(outputIdx);
-    printf("%d, %f\n", k, outputIdx);
     // align centroid to outputWindow
     centroid -= (outputIdx-1);
     
@@ -79,6 +77,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   THCudaTensor *outputIndiceCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceCuda", "torch.CudaTensor");
   THLongTensor *outputIndice = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "outputIndice", "torch.LongTensor");
   THCudaTensor *centroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "centroid", "torch.CudaTensor");
+  THCudaTensor *normalizedCentroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "normalizedCentroid", "torch.CudaTensor");
   THCudaTensor *noise = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "noise", "torch.CudaTensor");
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   
@@ -89,15 +88,15 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   THCudaTensor_resize1d(outputIndiceCuda, batchSize);
   THLongTensor_resize1d(outputIndice, batchSize);
   THCudaTensor_resize1d(centroid, batchSize);
+  THCudaTensor_resize1d(normalizedCentroid, batchSize);
   
   /* call cudakernel */
   dim3 blocks(batchSize); // each cuda-block is an example
   dim3 threads(WINDOWGATE_THREADS);
   cunnx_WindowGate_updateOutput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(output), THCudaTensor_data(centroid), 
-    THCudaTensor_data(outputIndiceCuda),
-    (const float*)THCudaTensor_data(input), 
-    (const float*)THCudaTensor_data(noise), 
+    THCudaTensor_data(output), THCudaTensor_data(centroid),
+    THCudaTensor_data(normalizedCentroid), THCudaTensor_data(outputIndiceCuda),
+    (const float*)THCudaTensor_data(input), (const float*)THCudaTensor_data(noise), 
     inputSize, outputSize, outputWindowSize, a, b
   );
   
@@ -120,13 +119,13 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
   const float *output_k = output + outputWindowSize*k;
   const float *input_k = input + inputSize*k;
   float *gradInput_k = gradInput + inputSize*k;
-  
+  float centroid = centroids[k];
+
   // get gradient of centroid
   buffer[tx] = 0;
   for (unsigned int i=tx; i<outputWindowSize; i+=blockDim.x)
   {
-    float centroid = output_k[i];
-    buffer[tx] += (float)gradOutput_k[i]*centroid*((float)i - centroid);
+    buffer[tx] += gradOutput_k[i]*output_k[i]*((float)(i+1) - centroid);
   }
   
   // add (reduce)
@@ -140,12 +139,11 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
   if (tx == 0)
   {
     int outputIdx = outputIndice[k];
-    float centroid = centroids[k];
     float gradCentroid = buffer[0]*c;
     centroid -= (lr*gradCentroid);
     centroid += outputIdx-1;
-    centroid /= (float)(outputSize-1);
-    buffer[WINDOWGATE_THREADS] = centroid*(float)(inputSize-1);
+    centroid /= (float)(outputSize);
+    buffer[WINDOWGATE_THREADS] = centroid*(float)(inputSize);
   }
   
   __syncthreads();
@@ -169,7 +167,7 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
   {
     __syncthreads();
     if (tx < stride)
-      buffer[tx] -= buffer[tx+stride];
+      buffer[tx] += buffer[tx+stride];
   }
   
   if (tx == 0)
