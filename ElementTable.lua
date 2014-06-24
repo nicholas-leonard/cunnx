@@ -12,6 +12,6 @@ function ElementTable:updateOutput(input)
 end
 
 function ElementTable:updateGradInput(input, gradOutput)
-   self.gradInput[index] = gradOutput
+   self.gradInput[self.index] = gradOutput
    return self.gradInput
 end

@@ -417,9 +417,9 @@ function cunnxtest.WindowSparse()
    inputScale:fill(1)
    local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
    outputScale:fill(1)   
-   local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
+   local gradOutputTable = {gradOutput, outputIndice}
    
-   local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
+   local inputTable = {input, inputIndice, outputIndice}
    
    local ws = nn.WindowSparse(inputSize, outputSize, outputWindowSize)
    ws:cuda()
@@ -453,7 +453,7 @@ function cunnxtest.WindowSparse()
       local outputTable = ws:forward(inputTable)
       local output = outputTable[1]
       local gradInputTable = ws:backward(inputTable, gradOutputTable)
-      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      local gradInput = gradInputTable[1]
       
       local output2 = mlp:forward(input2)
       local gradInput2 = mlp:backward(input2, gradOutput2)
@@ -503,7 +503,7 @@ function cunnxtest.WindowSparse_benchmark()
    outputScale:fill(1)   
    local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
    
-   local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
+   local inputTable = {input, inputIndice, outputIndice}
    
    local ws = nn.WindowSparse(inputSize, outputSize, outputWindowSize)
    ws:cuda()
@@ -522,7 +522,7 @@ function cunnxtest.WindowSparse_benchmark()
       local outputTable = ws:forward(inputTable)
       local output = outputTable[1]
       local gradInputTable = ws:backwardUpdate(inputTable, gradOutputTable, lr)  
-      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      local gradInput = gradInputTable[1]
       --ws:updateGradInput(inputTable, gradOutputTable)
       --ws:accGradParameters(inputTable, gradOutputTable, lr)
       --local gradInputTable = ws:backward(inputTable, gradOutputTable)  
@@ -635,7 +635,7 @@ function cunnxtest.WindowGate()
    end
 end
 
---cutorch.setDevice(2)
+cutorch.setDevice(2)
 
 function nn.testcudax(tests)
    math.randomseed(os.time())
@@ -649,5 +649,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax() 
+nn.testcudax({'WindowSparse', 'WindowGate', 'WindowSparse_benchmark'})
 

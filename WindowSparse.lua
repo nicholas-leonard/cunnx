@@ -43,9 +43,11 @@ function WindowSparse:__init(inputSize, outputSize, outputWindowSize, accUpdate)
    self.batchedGemmMax = 200
    
    -- for backward
-   self.gradOutputScale = torch.Tensor()
    self._gradInput = torch.Tensor()
    self.gradInput = {}
+   
+   -- for dense output
+   self.outputIndice = torch.LongTensor()
 
    self.batchSize = 0
    
@@ -65,8 +67,10 @@ end
 function WindowSparse:updateOutput(inputTable)
    local input, inputIndice, outputIndice = unpack(inputTable)
    if batchSize ~= input:size(1) then
+      self.outputIndice:resize(input:size(1)):fill(1)
       self.batchSize = input:size(1)
    end
+   outputIndice = outputIndice or self.outputIndice
    --print("windowsparse", input, inputIndice, outputIndice, inputScale, outputScale)
    self._output = input.nn.WindowSparse_updateOutput(self, input, inputIndice, outputIndice)
    --print("output", self._output, self:packOutput(self._output, outputIndice, outputScale))
@@ -77,6 +81,7 @@ end
 
 function WindowSparse:updateGradInput(inputTable, gradOutputTable)
    local input, inputIndice, outputIndice = unpack(inputTable)
+   outputIndice = outputIndice or self.outputIndice
    local gradOutput = gradOutputTable[1]
    local gradInput = input.nn.WindowSparse_updateGradInput(self, input, inputIndice, outputIndice, gradOutput)
    self.gradInput[1] = gradInput
@@ -85,6 +90,7 @@ end
 
 function WindowSparse:accGradParameters(inputTable, gradOutputTable, scale)
    local input, inputIndice, outputIndice = unpack(inputTable)
+   outputIndice = outputIndice or self.outputIndice
    local gradOutput = gradOutputTable[1]
    scale = scale or 1
    input.nn.WindowSparse_accGradParameters(self, input, inputIndice, outputIndice, gradOutput, scale)
@@ -100,10 +106,6 @@ function WindowSparse:type(type)
       end
       self._output = self._output:type(type)
       self._gradInput = self._gradInput:type(type)
-   
-      self.inputScale = self.inputScale:type(type)  
-      self.outputScale = self.outputScale:type(type) 
-      self.gradOutputScale = self.gradOutputScale:type(type) 
    end
    return self
 end
