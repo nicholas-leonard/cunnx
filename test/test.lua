@@ -610,14 +610,52 @@ function cunnxtest.WindowGate()
    input[3][11] = 100--]]
    local gradOutput = torch.randn(batchSize, outputWindowSize):cuda()
    local wg = nn.WindowGate(outputWindowSize, outputSize, inputStdv, outputStdv, lr)
-   local mlp = nn.Sequential()
-   mlp:add(nn.SoftMax())
-   mlp:add(wg)
-   mlp:cuda()
+   local sm = nn.SoftMax()
+   sm:cuda()
+   input = sm:forward(input)
+   wg:cuda()
    
-   local output = mlp:forward(input)
-   local gradInput = mlp:backward(input, {gradOutput, output[2]})   
+   local output = wg:forward(input)
+   local gradInput = wg:backward(input, {gradOutput, output[2]})  
    
+   local function round(a)
+      if (a - math.floor(a)) >= 0.5 then
+         return math.ceil(a)
+      end
+      return math.floor(a)
+   end 
+   
+   local input2 = input:clone():float()
+   local range = torch.repeatTensor(torch.range(1,input:size(2)):typeAs(input2),input:size(1),1)
+   local centroid = torch.cmul(input2, range):sum(2):select(2,1)
+   centroid:div(input:size(2))
+   centroid:mul(outputSize)
+   print(centroid)
+   outputIndice = torch.add(centroid, -outputWindowSize/2)
+   for i=1,batchSize do
+      outputIndice[i] = math.ceil(outputIndice[i])
+   end
+   outputIndice = outputIndice:long()
+   print(output[1], outputIndice)
+   centroid:add(-outputIndice:float()):add(1)
+   mytester:assertTensorEq(output[1], outputIndice, 0.0000001)
+   mytester:assertTensorEq(wg.centroid:float(), centroid, 0.0001)
+   
+   local function blur(mean, stdv, size)
+      local range = torch.range(1,size):float()
+      local a = 1/(stdv*math.sqrt(2*math.pi))
+      local b = -1/(2*stdv*stdv)
+      return range:add(-mean):pow(2):mul(b):exp():mul(a)
+   end
+   
+   local output2 = output[2]:float():zero()
+   for i=1,batchSize do
+      output2[i]:copy(blur(centroid[i], outputStdv, outputWindowSize))
+   end
+   print(centroid, output[2], output2)
+   mytester:assertTensorEq(output[2]:float(), output2, 0.00001)
+   
+   if true then return end
    cutorch.synchronize()
    local a = torch.Timer()
    for i=1,nloop do
@@ -627,15 +665,10 @@ function cunnxtest.WindowGate()
    cutorch.synchronize()
    print("WindowGate time :", a:time().real)
    
-   local function blur(mean, stdv, size)
-      local range = torch.range(1,size):float()
-      local a = 1/(stdv*math.sqrt(2*math.pi))
-      local b = -1/(2*stdv*stdv)
-      return range:add(-mean):pow(2):mul(b):exp():mul(a)
-   end
+   
 end
 
-cutorch.setDevice(2)
+--cutorch.setDevice(2)
 
 function nn.testcudax(tests)
    math.randomseed(os.time())
@@ -649,5 +682,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'WindowSparse', 'WindowGate', 'WindowSparse_benchmark'})
+nn.testcudax({'WindowGate'})
 

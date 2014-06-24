@@ -30,7 +30,7 @@ function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, 
    self.outputIndice = torch.LongTensor()
    self._output = torch.Tensor()
    self.centroid = torch.Tensor()
-   self.noise = torch.Tensor()
+   self.noise = torch.rand(10000):mul(self.noiseStdv) --max batch size
    self.train = true
    self.error = torch.Tensor()
    self.output = {self.outputIndice, self._output}
@@ -43,7 +43,7 @@ function WindowGate:updateOutput(input)
    if self.batchSize ~= input:size(1) then
       self.batchSize = input:size(1)
       self.inputSize = input:size(2)
-      self.noise:randn(input:size(1)):mul(self.noiseStdv)
+      self.noise:resize(self.batchSize)
       self.outputIndice:resize(self.batchSize)
       self.inputStdv = inputStdv or input:size(2)/2
       self.d = 1/(self.inputStdv*math.sqrt(2*math.pi))

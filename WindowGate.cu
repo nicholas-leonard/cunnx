@@ -14,7 +14,7 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
   // get coordinate of centoid
   buffer[tx] = 0;
   for (unsigned int i=tx; i<inputSize; i+=blockDim.x)
-    buffer[tx] += input_k[i]*(float)i;
+    buffer[tx] += input_k[i]*(float)(i+1);
   
   // add (reduce)
   for (unsigned int stride = WINDOWGATE_THREADS >> 1; stride > 0; stride >>= 1)
@@ -29,22 +29,24 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     float centroid = buffer[0];
     
     // make centroid a number between 0 and 1
-    centroid /= (float)(inputSize-1);
-    centroid += noise[k];
+    centroid /= (float)(inputSize);
+    //centroid += noise[k];
     
     // align centroid to output
-    centroid *= (float)(outputSize-1);
-    centroid += 1;
+    centroid *= (float)(outputSize);
+    printf("%d, %f\n", k, centroid);
     
-    float outputIdx = centroid - (float)outputWindowSize*0.5;
+    float outputIdx = centroid - 0.5*(float)outputWindowSize;
     
     // clip indices
     outputIdx = fminf(outputIdx, outputSize-outputWindowSize+1);
     outputIdx = fmaxf(outputIdx, 1);
     
-    outputIdx = roundf(outputIdx);
+    printf("%d, %d, %d, %f \n", k, outputSize, outputWindowSize, outputIdx);
+    outputIdx = ceilf(outputIdx);
+    printf("%d, %f\n", k, outputIdx);
     // align centroid to outputWindow
-    centroid -= outputIdx-1;
+    centroid -= (outputIdx-1);
     
     outputIndice[k] = (int)outputIdx;
     centroids[k] = centroid;
@@ -122,7 +124,10 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
   // get gradient of centroid
   buffer[tx] = 0;
   for (unsigned int i=tx; i<outputWindowSize; i+=blockDim.x)
-    buffer[tx] += (float)gradOutput_k[i]*output_k[i];
+  {
+    float centroid = output_k[i];
+    buffer[tx] += (float)gradOutput_k[i]*centroid*((float)i - centroid);
+  }
   
   // add (reduce)
   for (unsigned int stride = WINDOWGATE_THREADS >> 1; stride > 0; stride >>= 1)
