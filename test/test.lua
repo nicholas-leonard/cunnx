@@ -608,7 +608,7 @@ function cunnxtest.WindowGate()
    input[3][10] = 100
    input[3][11] = 100--]]
    local gradOutput = torch.randn(batchSize, outputWindowSize):cuda()
-   local wg = nn.WindowGate(outputWindowSize, outputSize, inputStdv, outputStdv, lr)
+   local wg = nn.WindowGate(outputWindowSize, outputSize, inputStdv, outputStdv, lr, 0)
    local sm = nn.SoftMax()
    sm:cuda()
    input = sm:forward(input)

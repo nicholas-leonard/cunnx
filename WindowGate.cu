@@ -30,11 +30,12 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     
     // make centroid a number between 0 and 1
     centroid /= (float)(inputSize);
-    //centroid += noise[k];
     
+    normalizedCentroids[k] = centroid;
+    centroid += noise[k];
+    centroid = fminf(fmaxf(0,centroid),1);
     // align centroid to output
     centroid *= (float)(outputSize);
-    normalizedCentroids[k] = centroid;
     
     float outputIdx = centroid - 0.5*(float)outputWindowSize;
     

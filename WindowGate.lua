@@ -31,7 +31,7 @@ function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, 
    self._output = torch.Tensor()
    self.centroid = torch.Tensor()
    self.normalizedCentroid = torch.Tensor()
-   self.noise = torch.rand(10000):mul(self.noiseStdv) --max batch size
+   self.noise = torch.randn(10000):mul(self.noiseStdv) -- ugly hack
    self.train = true
    self.error = torch.Tensor()
    self.output = {self.outputIndice, self._output}
