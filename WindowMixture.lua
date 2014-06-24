@@ -51,9 +51,7 @@ function WindowMixture:updateGradInput(inputTable, gradOutputTable)
    local input, inputIndice = self:unpackInput(inputTable)
    local gradOutput = self:unpackGradOutput(gradOutputTable)
    self.mixtureGradInput = self.cmul:updateGradInput(self.mixtureInput, gradOutput)
-   
    self.expertGradInput = self.expert:updateGradInput(self.expertInput, {self.mixtureGradInput[2]})
-   
    self.gaterGradInput = self.gater:updateGradInput(inputTable, self.mixtureGradInput[1])
    
    local gaterGradInput = self:unpackInput(self.gaterGradInput)

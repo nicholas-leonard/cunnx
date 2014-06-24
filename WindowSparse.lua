@@ -71,9 +71,7 @@ function WindowSparse:updateOutput(inputTable)
       self.batchSize = input:size(1)
    end
    outputIndice = outputIndice or self.outputIndice
-   --print("windowsparse", input, inputIndice, outputIndice, inputScale, outputScale)
    self._output = input.nn.WindowSparse_updateOutput(self, input, inputIndice, outputIndice)
-   --print("output", self._output, self:packOutput(self._output, outputIndice, outputScale))
    self.output[1] = self._output
    self.output[2] = outputIndice
    return self.output

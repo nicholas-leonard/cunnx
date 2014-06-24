@@ -13,12 +13,13 @@ local WindowGate, parent = torch.class('nn.WindowGate', 'nn.Module')
 -- TODO add gaussian jumps for robustness
 ------------------------------------------------------------------------
 
-function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, lr)
+function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, lr, noiseStdv)
    parent.__init(self)
    self.outputWindowSize = outputWindowSize
    self.outputSize = outputSize
    self.inputStdv = inputStdv or 2
    self.outputStdv = outputStdv or outputWindowSize/2
+   self.noiseStdv = noiseStdv or outputWindowSize/(outputSize*2)
    
    self.a = 1/(self.outputStdv*math.sqrt(2*math.pi))
    self.b = -1/(2*self.outputStdv*self.outputStdv)
@@ -29,6 +30,8 @@ function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, 
    self.outputIndice = torch.LongTensor()
    self._output = torch.Tensor()
    self.centroid = torch.Tensor()
+   self.noise = torch.Tensor()
+   self.train = true
    self.error = torch.Tensor()
    self.output = {self.outputIndice, self._output}
    self.batchSize = 0
@@ -40,6 +43,7 @@ function WindowGate:updateOutput(input)
    if self.batchSize ~= input:size(1) then
       self.batchSize = input:size(1)
       self.inputSize = input:size(2)
+      self.noise:randn(input:size(1)):mul(self.noiseStdv)
       self.outputIndice:resize(self.batchSize)
       self.inputStdv = inputStdv or input:size(2)/2
       self.d = 1/(self.inputStdv*math.sqrt(2*math.pi))
@@ -59,6 +63,7 @@ function WindowGate:type(type)
    self.gradInput = self.gradInput:type(type)
    self.centroid = self.centroid:type(type)
    self.error = self.error:type(type)
+   self.noise = self.noise:type(type)
    self.output = {self.outputIndice, self._output}
    if type == 'torch.CudaTensor' then
       self.outputIndiceCuda = torch.CudaTensor()

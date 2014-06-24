@@ -2,7 +2,7 @@
 
 __global__ void cunnx_WindowGate_updateOutput_kernel(
   float *output, float *centroids, float *outputIndice,
-  const float* input, int inputSize, int outputSize, 
+  const float *input, const float *noise, int inputSize, int outputSize, 
   int outputWindowSize, float a, float b)
 {
   __shared__ float buffer[WINDOWGATE_THREADS];
@@ -30,6 +30,7 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     
     // make centroid a number between 0 and 1
     centroid /= (float)(inputSize-1);
+    centroid += noise[k];
     
     // align centroid to output
     centroid *= (float)(outputSize-1);
@@ -76,6 +77,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   THCudaTensor *outputIndiceCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceCuda", "torch.CudaTensor");
   THLongTensor *outputIndice = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "outputIndice", "torch.LongTensor");
   THCudaTensor *centroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "centroid", "torch.CudaTensor");
+  THCudaTensor *noise = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "noise", "torch.CudaTensor");
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
@@ -92,8 +94,9 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   cunnx_WindowGate_updateOutput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(output), THCudaTensor_data(centroid), 
     THCudaTensor_data(outputIndiceCuda),
-    (const float*)THCudaTensor_data(input), inputSize, outputSize,
-    outputWindowSize, a, b
+    (const float*)THCudaTensor_data(input), 
+    (const float*)THCudaTensor_data(noise), 
+    inputSize, outputSize, outputWindowSize, a, b
   );
   
   THLongTensor_copyCuda(outputIndice, outputIndiceCuda);

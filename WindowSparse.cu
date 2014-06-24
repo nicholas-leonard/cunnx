@@ -52,6 +52,7 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, input->size[1] <= inputSize, 2, "invalid input size"); 
   luaL_argcheck(L, inputIndice->nDimension == 1, 3, "1D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 1, 4, "1D(batch mode) tensor expected");
+  luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
   
   batchSize = input->size[0];
   inputWindowSize = input->size[1];
@@ -256,7 +257,7 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
   gradInput_ = THCudaTensor_new();
   
 
-  if (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax)
+  if (false && (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax))
   {
     cudaStream_t streams[WINDOWSPARSE_STREAMS];
     
@@ -278,12 +279,13 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
       THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
       THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
       
-      
-      
       stat = cublasSgemv(handle, CUBLAS_OP_N,  outputWindowSize, inputWindowSize,
                         &alpha, (const float*)THCudaTensor_data(weight_), inputSize,
                         (const float*)THCudaTensor_data(gradOutput_), 1,
                         &beta, THCudaTensor_data(gradInput_), 1);
+                        
+      if (stat != CUBLAS_STATUS_SUCCESS) 
+        THError("cublasSgemv failed");
     }
     
     cublasSetStream(handle, NULL);
