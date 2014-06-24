@@ -22,7 +22,7 @@ function WindowMixture:__init(expert, gater, mode)
    self.modules = {gater, expert, cmul}
    self.output = {}
    self._gradInput = torch.Tensor()
-   self.gradInput = self.DENSE_SPARSE and self._gradInput or {}
+   self.gradInput = (self.mode == self.DENSE_SPARSE) and self._gradInput or {}
    self.batchSize = 0
    
    -- for dense inputs or outputs
@@ -117,7 +117,7 @@ function WindowMixture:type(type)
    self.gater:type(type)
    self.cmul:type(type)
    self._gradInput = self._gradInput:type(type)
-   self.gradInput = self.DENSE_SPARSE and self._gradInput or {}
+   self.gradInput = (self.mode == self.DENSE_SPARSE) and self._gradInput or {}
 end
 
 
