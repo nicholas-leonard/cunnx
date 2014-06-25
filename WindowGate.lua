@@ -20,6 +20,7 @@ function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, 
    self.inputStdv = inputStdv or 2
    self.outputStdv = outputStdv or outputWindowSize/2
    self.noiseStdv = noiseStdv or outputWindowSize/(outputSize*2)
+   self.train = true
    
    self.a = 1/(self.outputStdv*math.sqrt(2*math.pi))
    self.b = -1/(2*self.outputStdv*self.outputStdv)

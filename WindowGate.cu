@@ -3,7 +3,7 @@
 __global__ void cunnx_WindowGate_updateOutput_kernel(
   float *output, float *centroids, float *normalizedCentroids, float *outputIndice,
   const float *input, const float *noise, int inputSize, int outputSize, 
-  int outputWindowSize, float a, float b)
+  int outputWindowSize, float a, float b, int train)
 {
   __shared__ float buffer[WINDOWGATE_THREADS];
   unsigned int tx = threadIdx.x;
@@ -32,8 +32,11 @@ __global__ void cunnx_WindowGate_updateOutput_kernel(
     centroid /= (float)(inputSize);
     
     normalizedCentroids[k] = centroid;
-    centroid += noise[k];
-    centroid = fminf(fmaxf(0,centroid),1);
+    if ( train )
+    {
+      centroid += noise[k];
+      centroid = fminf(fmaxf(0,centroid),1);
+    }
     // align centroid to output
     centroid *= (float)(outputSize);
     
@@ -72,6 +75,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
   int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
   int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
+  int train = luaT_getfieldcheckboolean(L, 1, "train");
   float a = (float)luaT_getfieldchecknumber(L, 1, "a");
   float b = (float)luaT_getfieldchecknumber(L, 1, "b");
   
@@ -98,7 +102,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
     THCudaTensor_data(output), THCudaTensor_data(centroid),
     THCudaTensor_data(normalizedCentroid), THCudaTensor_data(outputIndiceCuda),
     (const float*)THCudaTensor_data(input), (const float*)THCudaTensor_data(noise), 
-    inputSize, outputSize, outputWindowSize, a, b
+    inputSize, outputSize, outputWindowSize, a, b, train
   );
   
   THLongTensor_copyCuda(outputIndice, outputIndiceCuda);
