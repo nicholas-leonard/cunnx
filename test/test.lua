@@ -12,6 +12,20 @@ local cunntestx = {}
 
 torch.setdefaulttensortype('torch.FloatTensor')
 
+local function round(a)
+   if (a - math.floor(a)) >= 0.5 then
+      return math.ceil(a)
+   end
+   return math.floor(a)
+end 
+
+local function blur(mean, stdv, size)
+   local range = torch.range(1,size):float()
+   local a = 1/(stdv*math.sqrt(2*math.pi))
+   local b = -1/(2*stdv*stdv)
+   return range:add(-mean):pow(2):mul(b):exp():mul(a)
+end
+
 function cunnxtest.SoftMaxTree()
    local input = torch.randn(120,100)
    local target = torch.repeatTensor(torch.IntTensor{20,23,27,10,8}, 24)
@@ -617,13 +631,6 @@ function cunnxtest.WindowGate()
    local output = wg:forward(input)
    local gradInput = wg:backward(input, {output[2], gradOutput})  
    
-   local function round(a)
-      if (a - math.floor(a)) >= 0.5 then
-         return math.ceil(a)
-      end
-      return math.floor(a)
-   end 
-   
    local input2 = input:clone():float()
    local range = torch.repeatTensor(torch.range(1,input:size(2)):typeAs(input2),input:size(1),1)
    local centroid = torch.cmul(input2, range):sum(2):select(2,1)
@@ -639,13 +646,6 @@ function cunnxtest.WindowGate()
    
    mytester:assertTensorEq(output[1], outputIndice, 0.0000001)
    mytester:assertTensorEq(wg.centroid:float(), centroid, 0.0001)
-   
-   local function blur(mean, stdv, size)
-      local range = torch.range(1,size):float()
-      local a = 1/(stdv*math.sqrt(2*math.pi))
-      local b = -1/(2*stdv*stdv)
-      return range:add(-mean):pow(2):mul(b):exp():mul(a)
-   end
    
    local output2 = output[2]:float():zero()
    for i=1,batchSize do
@@ -686,6 +686,30 @@ function cunnxtest.WindowGate()
    cutorch.synchronize()
    print("WindowGate time :", a:time().real)
    
+end
+
+function cunnxtest.Balance()
+   local inputSize = 7 
+   local batchSize = 3
+   local nBatch = 1
+   
+   local input = torch.randn(batchSize, inputSize):mul(0.1):cuda()
+   for i=1,batchSize do
+      input[i]:add(blur(3, 1, inputSize):cuda())
+   end
+   local sm = nn.SoftMax()
+   sm:cuda()
+   input = sm:forward(input)
+   local gradOutput = torch.randn(batchSize, inputSize):cuda()
+   local bl = nn.Balance(nBatch)
+   bl:cuda()
+   
+   local output = bl:forward(input)
+   local p_y = output:sum(1):div(output:sum())
+   mytester:assert(p_y:std() < 0.02)
+   mytester:assert(p_y:sum() == 1)
+   
+   local gradInput = bl:backward(input, gradOutput)
 end
 
 --cutorch.setDevice(2)
