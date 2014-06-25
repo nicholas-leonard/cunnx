@@ -132,6 +132,8 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
       if (cudaStreamDestroy(streams[i]) != cudaSuccess)
         THError("error destroying stream");
     }
+    
+    cudaDeviceSynchronize();
   }
   else
   {  
@@ -295,6 +297,8 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
       if (cudaStreamDestroy(streams[i]) != cudaSuccess)
         THError("error destroying stream");
     }
+    
+    cudaDeviceSynchronize();
   }
   else
   {  

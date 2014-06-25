@@ -14,6 +14,7 @@ function Balance:__init(nBatch)
    self.sum = torch.Tensor()
    self.batchSize = 0
    self.startIdx = 1
+   self.train = true
 end
 
 function Balance:updateOutput(input)
@@ -21,8 +22,13 @@ function Balance:updateOutput(input)
    if self.batchSize ~= input:size(1) then
       self.inputCache:resize(input:size(1)*self.nBatch, input:size(2)):zero()
       self.batchSize = input:size(1)
+      self.startIdx = 1
    end
    
+   self.output:resizeAs(input):copy(input)
+   if not self.train then
+      return self.output
+   end
    -- keep track of previous batches of P(Y|X)
    self.inputCache:narrow(1, self.startIdx, input:size(1)):copy(input)
    self.inputCache:sum(1)
@@ -31,7 +37,6 @@ function Balance:updateOutput(input)
    -- P(Y) = sum_x( P(Y|X)*P(X) )
    self.prob:sum(self.inputCache, 1):div(self.prob:sum())
    -- P(X|Y) = P(Y|X)*P(X)/P(Y)
-   self.output:resizeAs(input):copy(input)
    self.output:cdiv(self.prob:resize(1,input:size(2)):expandAs(input))--:div(input:size(2))
    -- P(Z|X) = P(X|Y)*sum_y( P(X|Y) ) where P(Z) = 1/d where d is a constant
    self.sum:sum(self.output, 2)

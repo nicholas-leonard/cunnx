@@ -32,6 +32,7 @@ function WindowGate:__init(outputWindowSize, outputSize, inputStdv, outputStdv, 
    self._output = torch.Tensor()
    self.centroid = torch.Tensor()
    self.normalizedCentroid = torch.Tensor()
+   self.targetCentroid = torch.Tensor()
    self.noise = torch.randn(10000):mul(self.noiseStdv) -- ugly hack
    self.train = true
    self.error = torch.Tensor()
@@ -56,7 +57,8 @@ end
 
 function WindowGate:updateGradInput(input, gradOutputTable)   
    local gradOutput = gradOutputTable[2]
-   return input.nn.WindowGate_updateGradInput(self, input, gradOutput)
+   local gradInput = input.nn.WindowGate_updateGradInput(self, input, gradOutput)
+   return gradInput
 end
 
 function WindowGate:type(type)
@@ -64,6 +66,7 @@ function WindowGate:type(type)
    self.gradInput = self.gradInput:type(type)
    self.centroid = self.centroid:type(type)
    self.normalizedCentroid = self.normalizedCentroid:type(type)
+   self.targetCentroid = self.targetCentroid:type(type)
    self.error = self.error:type(type)
    self.noise = self.noise:type(type)
    self.output = {self.outputIndice, self._output}

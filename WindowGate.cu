@@ -111,8 +111,8 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
 }
 
 __global__ void cunnx_WindowGate_updateGradInput_kernel(
-  float *gradInput, float *error, const float *centroids,
-  const float *input, const float *outputIndice,
+  float *gradInput, float *error, float* targetCentroids, 
+  const float *centroids,const float *input, const float *outputIndice,
   const float* output, const float* gradOutput, 
   int inputSize, int outputSize, int outputWindowSize,
   float c, float d, float e, float lr)
@@ -148,6 +148,7 @@ __global__ void cunnx_WindowGate_updateGradInput_kernel(
     centroid -= (lr*gradCentroid);
     centroid += outputIdx-1;
     centroid /= (float)(outputSize);
+    targetCentroids[k] = centroid;
     buffer[WINDOWGATE_THREADS] = centroid*(float)(inputSize);
   }
   
@@ -197,6 +198,7 @@ static int cunnx_WindowGate_updateGradInput(lua_State *L)
   
   THCudaTensor *error = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "error", "torch.CudaTensor");
   THCudaTensor *centroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "centroid", "torch.CudaTensor");
+  THCudaTensor *targetCentroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "targetCentroid", "torch.CudaTensor");
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   THCudaTensor *outputIndiceCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceCuda", "torch.CudaTensor");
   THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradInput", "torch.CudaTensor");
@@ -206,12 +208,14 @@ static int cunnx_WindowGate_updateGradInput(lua_State *L)
   
   THCudaTensor_resize2d(gradInput, batchSize, inputSize);
   THCudaTensor_resize1d(error, batchSize);
+  THCudaTensor_resize1d(targetCentroid, batchSize);
     
   /* call cudakernel */
   dim3 blocks(batchSize); // each cuda-block is an example
   dim3 threads(WINDOWGATE_THREADS);
   cunnx_WindowGate_updateGradInput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradInput), THCudaTensor_data(error), 
+    THCudaTensor_data(targetCentroid), 
     (const float*)THCudaTensor_data(centroid),
     (const float*)THCudaTensor_data(input), 
     (const float*)THCudaTensor_data(outputIndiceCuda),
