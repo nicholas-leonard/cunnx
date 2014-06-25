@@ -3,8 +3,6 @@ require 'cunn'
 require 'nnx'
 require 'cunnx'
 
-cutorch.setDevice(2)
-
 local cunnxtest = {}
 local precision_forward = 1e-6
 local precision_backward = 1e-6
@@ -13,6 +11,20 @@ local times = {}
 local cunntestx = {}
 
 torch.setdefaulttensortype('torch.FloatTensor')
+
+local function round(a)
+   if (a - math.floor(a)) >= 0.5 then
+      return math.ceil(a)
+   end
+   return math.floor(a)
+end 
+
+local function blur(mean, stdv, size)
+   local range = torch.range(1,size):float()
+   local a = 1/(stdv*math.sqrt(2*math.pi))
+   local b = -1/(2*stdv*stdv)
+   return range:add(-mean):pow(2):mul(b):exp():mul(a)
+end
 
 function cunnxtest.SoftMaxTree()
    local input = torch.randn(120,100)
@@ -401,6 +413,183 @@ function cunnxtest.BlockSparse_dense()
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
 end
 
+function cunnxtest.WindowSparse()
+   local inputSize = 32
+   local outputSize = 32
+   local inputWindowSize = 8
+   local outputWindowSize = 8
+   local batchSize = 5
+   local lr = 0.1
+   
+   -- windowSparse
+   local input = torch.randn(batchSize,inputWindowSize):cuda()
+   local gradOutput = torch.randn(batchSize,outputWindowSize):cuda()
+   local inputIndice = torch.randperm(inputSize-inputWindowSize):narrow(1,1,batchSize):long()
+   local outputIndice = torch.randperm(outputSize-outputWindowSize):narrow(1,1,batchSize):long()
+   
+   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScale:fill(1)
+   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScale:fill(1)   
+   local gradOutputTable = {gradOutput, outputIndice}
+   
+   local inputTable = {input, inputIndice, outputIndice}
+   
+   local ws = nn.WindowSparse(inputSize, outputSize, outputWindowSize)
+   ws:cuda()
+   local cutoff = math.sqrt(inputWindowSize*outputWindowSize)
+   ws.batchedGemmMax = cutoff + 10
+   
+   local message = {'batched', 'streamed'}
+   
+   -- linear
+   local input2 = torch.zeros(batchSize, inputSize):cuda()
+   local gradOutput2 = torch.zeros(batchSize, outputSize):cuda()
+      
+   for i=1,batchSize do
+      local inputIdx = inputIndice[i]
+      input2[i]:narrow(1, inputIdx, inputWindowSize):copy(input[i])
+      local outputIdx = outputIndice[i]
+      gradOutput2[i]:narrow(1, outputIdx, outputWindowSize):copy(gradOutput[i])
+   end
+   
+   local mlp = nn.Linear(inputSize, outputSize)
+   mlp:cuda()
+   mlp.weight = ws.weight:clone()
+   mlp.bias = ws.bias:clone()
+   
+   -- compare
+   
+   for i=1,2 do
+      mlp:zeroGradParameters()
+      ws:zeroGradParameters()
+      
+      local outputTable = ws:forward(inputTable)
+      local output = outputTable[1]
+      local gradInputTable = ws:backward(inputTable, gradOutputTable)
+      local gradInput = gradInputTable[1]
+      
+      local output2 = mlp:forward(input2)
+      local gradInput2 = mlp:backward(input2, gradOutput2)
+      
+      local output3 = torch.zeros(batchSize, outputWindowSize)
+      local gradInput3 = torch.zeros(batchSize, inputWindowSize)
+      
+      for i=1,batchSize do
+         local outputIdx = outputIndice[i]
+         output3[i]:copy(output2[i]:narrow(1, outputIdx, outputWindowSize))
+         local inputIdx = inputIndice[i]
+         gradInput3[i]:copy(gradInput2[i]:narrow(1, inputIdx, inputWindowSize))
+      end
+      
+      mytester:assertTensorEq(output3:float(), output:float(), 0.0001, 'error on state (forward)'..message[i])
+      mytester:assertTensorEq(gradInput3:float(), gradInput:float(), 0.0001, 'error on state (backward gradInput)'..message[i])
+      ws.batchedGemmMax = cutoff - 10
+      
+      mytester:assertTensorEq(ws.gradWeight:float(), mlp.gradWeight:float(), 0.0001, 'error on state (backward gradWeight)'..message[i])
+      mytester:assertTensorEq(ws.gradBias:float(), mlp.gradBias:float(), 0.0001, 'error on state (backward gradBias)'..message[i])
+   end
+end
+
+function cunnxtest.WindowSparse_benchmark()
+   local inputSize = 10000
+   local outputSize = 10000
+   local inputWindowSize = 256
+   local outputWindowSize = 256
+   local batchSize = 512
+   --speedup is (forward only)
+   -- window/batch streams + gemv     vs gemmBatched
+   -- 10k/512/128: 21.9607, 0.1708    vs 10.5454 0.0837
+   -- 10k/512/256: 21.98, 0.105       vs 10.4632 0.05
+   -- 10k/256/256: 40.68, 0.0944      vs 35.5428 0.0814
+   -- 10k/64/128:  38.508 0.0688      vs 131.315 0.2323
+   -- 10k/128/128: 39.206 0.0692      vs 85.25   0.15
+   local lr = 0.1
+   
+   local input = torch.randn(batchSize,inputWindowSize):cuda()
+   local gradOutput = torch.randn(batchSize,outputWindowSize):cuda()
+   local inputIndice = torch.randperm(inputSize-inputWindowSize):narrow(1,1,batchSize):long()
+   local outputIndice = torch.randperm(outputSize-outputWindowSize):narrow(1,1,batchSize):long()
+   
+   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
+   inputScale:fill(1)
+   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
+   outputScale:fill(1)   
+   local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
+   
+   local inputTable = {input, inputIndice, outputIndice}
+   
+   local ws = nn.WindowSparse(inputSize, outputSize, outputWindowSize)
+   ws:cuda()
+   ws.batchedGemmMax = 200
+   
+   ws:forward(inputTable)
+   local tm, tm2 = {}, {}
+   times['WindowSparse vs full dense'] = tm
+   times['WindowSparse vs partial dense'] = tm2
+   
+   cutorch.synchronize()
+   local a = torch.Timer()
+   for i=1,nloop do
+      --experts
+      --ws:zeroGradParameters()
+      local outputTable = ws:forward(inputTable)
+      local output = outputTable[1]
+      local gradInputTable = ws:backwardUpdate(inputTable, gradOutputTable, lr)  
+      local gradInput = gradInputTable[1]
+      --ws:updateGradInput(inputTable, gradOutputTable)
+      --ws:accGradParameters(inputTable, gradOutputTable, lr)
+      --local gradInputTable = ws:backward(inputTable, gradOutputTable)  
+      --local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      --ws:updateParameters(lr)
+   end
+   cutorch.synchronize()
+   
+   tm.gpu = a:time().real
+   tm2.gpu = a:time().real
+   print("WindowSparse time :", tm.gpu)
+   ws = nil
+   collectgarbage()
+   
+   local mlp = nn.Linear(inputSize, outputSize)
+   mlp:cuda()
+   local input3 = torch.randn(batchSize, inputSize):cuda()
+   local gradOutput3 = torch.randn(batchSize, outputSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      --mlp:zeroGradParameters()
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, lr)
+      --mlp:updateParameters(lr)
+      --mlp.weight:renorm(2, 1, 1)
+   end
+   cutorch.synchronize()
+   tm.cpu = a:time().real
+   
+   mlp = nn.Linear(inputWindowSize, outputWindowSize)
+   mlp:cuda()
+   input3 = torch.randn(batchSize, inputWindowSize):cuda()
+   gradOutput3 = torch.randn(batchSize, outputWindowSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      --mlp:zeroGradParameters()
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      --mlp:backward(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, lr)
+      --mlp:updateParameters(lr)
+      --mlp.weight:renorm(2, 1, 1)
+   end
+   cutorch.synchronize()
+   tm2.cpu = a:time().real
+end
+
 function cunnxtest.Sort()
    local batchSize = 8
    local nInput = 5
@@ -417,6 +606,113 @@ function cunnxtest.Sort()
    mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward double)')
 end
 
+function cunnxtest.WindowGate()
+   local outputWindowSize = 5
+   local outputSize = 120
+   local inputSize = 7 
+   local inputStdv = 2
+   local outputStdv = outputWindowSize/2
+   local batchSize = 3
+   local lr = 0.1
+   
+   local input = torch.randn(batchSize, inputSize):cuda()
+   --[[input = torch.zeros(batchSize, inputSize):cuda()
+   input[1][20] = 100
+   input[2][1] = 100
+   input[3][10] = 100
+   input[3][11] = 100--]]
+   local gradOutput = torch.randn(batchSize, outputWindowSize):cuda()
+   local wg = nn.WindowGate(outputWindowSize, outputSize, inputStdv, outputStdv, lr, 0)
+   local sm = nn.SoftMax()
+   sm:cuda()
+   input = sm:forward(input)
+   wg:cuda()
+   
+   local output = wg:forward(input)
+   local gradInput = wg:backward(input, {output[2], gradOutput})  
+   
+   local input2 = input:clone():float()
+   local range = torch.repeatTensor(torch.range(1,input:size(2)):typeAs(input2),input:size(1),1)
+   local centroid = torch.cmul(input2, range):sum(2):select(2,1)
+   centroid:div(input:size(2))
+   centroid:mul(outputSize)
+   
+   outputIndice = torch.add(centroid, -outputWindowSize/2)
+   for i=1,batchSize do
+      outputIndice[i] = math.ceil(outputIndice[i])
+   end
+   outputIndice = outputIndice:long()
+   centroid:add(-outputIndice:float()):add(1)
+   
+   mytester:assertTensorEq(output[1], outputIndice, 0.0000001)
+   mytester:assertTensorEq(wg.centroid:float(), centroid, 0.0001)
+   
+   local output2 = output[2]:float():zero()
+   for i=1,batchSize do
+      output2[i]:copy(blur(centroid[i], outputStdv, outputWindowSize))
+   end
+   
+   mytester:assertTensorEq(output[2]:float(), output2, 0.00001)
+   
+   local gradOutput2 = gradOutput:float()
+   range = torch.repeatTensor(torch.range(1,outputWindowSize):float(),input:size(1),1)
+   range:add(centroid:clone():mul(-1):resize(batchSize, 1):expandAs(range))
+   gradOutput2:cmul(output2):cmul(range)
+   local gradCentroid = gradOutput2:sum(2)
+   gradCentroid:mul(1/(outputStdv*outputStdv))
+   gradCentroid:mul(-lr):add(centroid)
+   gradCentroid = gradCentroid:add(outputIndice:float()):add(-1):select(2,1)
+   gradCentroid:div(outputSize):mul(inputSize)
+   
+   local target = input2:clone()
+   for i=1,batchSize do
+      target[i]:copy(blur(gradCentroid[i], inputStdv, inputSize))
+   end
+   
+   local cr = nn.DistNLLCriterion{inputIsProbability=true,targetIsProbability=true}
+   local err = cr:forward(input2, target)
+   local gradInput2 = cr:backward(input2, target)
+   
+   mytester:assert(math.abs(err - wg.error:sum()) < 0.00001)
+   mytester:assertTensorEq(gradInput2, gradInput:float(), 0.0001)
+   
+   if true then return end
+   cutorch.synchronize()
+   local a = torch.Timer()
+   for i=1,nloop do
+      local output = wg:forward(input)
+      local gradInput = wg:backward(input, {gradOutput, output[2]})  
+   end
+   cutorch.synchronize()
+   print("WindowGate time :", a:time().real)
+   
+end
+
+function cunnxtest.Balance()
+   local inputSize = 7 
+   local batchSize = 3
+   local nBatch = 1
+   
+   local input = torch.randn(batchSize, inputSize):mul(0.1):cuda()
+   for i=1,batchSize do
+      input[i]:add(blur(3, 1, inputSize):cuda())
+   end
+   local sm = nn.SoftMax()
+   sm:cuda()
+   input = sm:forward(input)
+   local gradOutput = torch.randn(batchSize, inputSize):cuda()
+   local bl = nn.Balance(nBatch)
+   bl:cuda()
+   
+   local output = bl:forward(input)
+   local p_y = output:sum(1):div(output:sum())
+   mytester:assert(p_y:std() < 0.02)
+   mytester:assert(p_y:sum() == 1)
+   
+   local gradInput = bl:backward(input, gradOutput)
+end
+
+--cutorch.setDevice(2)
 
 function nn.testcudax(tests)
    math.randomseed(os.time())
@@ -430,5 +726,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax() 
+nn.testcudax()
 
