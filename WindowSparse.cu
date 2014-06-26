@@ -106,6 +106,7 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
       if (cudaStreamCreate(&streams[i]) != cudaSuccess)
         THError("error initializing stream");
     }
+    cudaDeviceSynchronize();
     
     for (int i=0; i<batchSize; i++)
     {
@@ -126,14 +127,15 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
     }
     
     cublasSetStream(handle, NULL);
-  
+    cudaDeviceSynchronize();
+    
     for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
     {
       if (cudaStreamDestroy(streams[i]) != cudaSuccess)
         THError("error destroying stream");
     }
     
-    cudaDeviceSynchronize();
+    
   }
   else
   {  
@@ -268,6 +270,7 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
       if (cudaStreamCreate(&streams[i]) != cudaSuccess)
         THError("error initializing stream");
     }
+    cudaDeviceSynchronize();
     
     for (int i=0; i<batchSize; i++)
     {
@@ -291,14 +294,14 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
     }
     
     cublasSetStream(handle, NULL);
+    cudaDeviceSynchronize();
   
     for (int i=0; i<WINDOWSPARSE_STREAMS; i++)
     {
       if (cudaStreamDestroy(streams[i]) != cudaSuccess)
         THError("error destroying stream");
     }
-    
-    cudaDeviceSynchronize();
+  
   }
   else
   {  
