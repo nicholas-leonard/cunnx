@@ -61,7 +61,7 @@ function NoisyReLU:updateOutput(input)
       self.batchSize = input:size(1)
    end
   
-   self:output:copy(input)
+   self.output:copy(input)
    self.output:add(noise)
      
    -- check if a neuron is active

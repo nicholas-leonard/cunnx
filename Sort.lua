@@ -47,7 +47,7 @@ end
 
 function Sort:type(type)
    self.gradInput = self.gradInput:type(type)
-   if (type ~= 'torch.CudaType') then
+   if (type ~= 'torch.CudaTensor') then
       self._output = self._output:type(type)
       self._input = self._input:type(type)
       self.output = {self._output, self.indice}

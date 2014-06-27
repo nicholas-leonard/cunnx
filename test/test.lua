@@ -726,5 +726,6 @@ function nn.testcudax(tests)
    end
 end
 
+-- Note that WindowSparse* tests might fail on some GPU cards.
 nn.testcudax()
 
