@@ -16,19 +16,19 @@ function Sort:__init(dim, descending)
    self._output = torch.Tensor()
    self._input = torch.Tensor()
    self.output = {self._output, self.indice}
-   self.cuda = false
+   self._cuda = false
 end
 
 function Sort:updateOutput(input)
    assert(input:dim() == 2, "Only works with matrices")
-   if self.cuda then
+   if self._cuda then
       self._input:resize(input:size())
       self._input:copy(input)
       input = self._input
    end
    self._output:sort(self.indice, input, self.dim, self.descending)
-   if self.cuda then
-      self._outputCuda:resize(output:size())
+   if self._cuda then
+      self._outputCuda:resize(self._output:size())
       self._outputCuda:copy(self._output)
       self._indiceCuda:resize(self.indice:size())
       self._indiceCuda:copy(self.indice)
@@ -52,7 +52,7 @@ function Sort:type(type)
       self._input = self._input:type(type)
       self.output = {self._output, self.indice}
    else
-      self.cuda = true
+      self._cuda = true
       self._output = self._output:float()
       self._input = self._input:float()
       self._outputCuda = torch.CudaTensor()
