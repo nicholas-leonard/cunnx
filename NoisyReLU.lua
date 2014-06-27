@@ -4,7 +4,7 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha_range, std)
 
    -- Params
    -- sparsityFactor: the micro sparsity of signals through each neuron
-   -- threshold_lr: the learning rate of learning the optimum threshold for each neuron
+   -- threshold_lr: the rate for learning the optimum threshold for each neuron
    --               so that the activeness of the neuron approaches sparsityFactor
    -- alpha_range: {start_weight, num_batches, final_weight} for setting the weight on the
    --              contemporary sparsity when calculating the mean sparsity over many batches. 
@@ -39,39 +39,42 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha_range, std)
    
    self.threshold = torch.Tensor()
    self.mean_sparsity = torch.Tensor()
+   self.noise = torch.Tensor()
+   self.activated = torch.Tensor()
+   self.sparsity = torch.Tensor()
+   
+   self.batchSize = 0
 end
 
 
 function NoisyReLU:updateOutput(input)
-   
-   if self.threshold:nElement() == 0 then
-      self.threshold = torch.zeros(input:size(2))
-   end
-   
-   local noise = torch.zeros(input:size())
-   
-   -- setting noise
-   if self.std > 0 then
-      noise = noise:normal(0, self.std)
+   assert(input:dim() == 2, "Only works with 2D inputs (batch-mode)")
+   if self.batchSize ~= input:size(1) then
+      self.output:resizeAS(input)
+      self.noise:resizeAs(input)
+      self.threshold:resize(1, input:size(2)):zero()
+      -- setting noise
+      if self.std > 0 then
+         self.noise:normal(0, self.std)
+      end
+      self.batchSize = input:size(1)
    end
   
-   input = input + noise 
+   self:output:copy(input)
+   self.output:add(noise)
      
    -- check if a neuron is active
-   local activated = torch.Tensor():resizeAs(input)
-   for i=1,input:size(1) do 
-      activated[i] = torch.gt(input[i], self.threshold)
-   end
+   self.activated:gt(input, self.threshold:expandAs(input))
    
-   self.output = torch.cmul(activated, input)
+   self.output:cmul(self.activated)
 
    -- find the activeness of a neuron in each batch
-   local sparsity = activated:sum(1):div(self.output:size(1))
-   sparsity:resize(self.output:size(2))
+   self.sparsity:mean(self.activated, 1)
 
    -- recalculate mean sparsity, using exponential moving average   
    if self.mean_sparsity:nElement() == 0 then
-      self.mean_sparsity = sparsity
+      self.mean_sparsity:resize(input:size(2))
+      self.mean_sparsity:copy(sparsity)
    else
    
       if self.alpha - self.decrement < self.alpha_range[3] then
@@ -80,9 +83,7 @@ function NoisyReLU:updateOutput(input)
          self.alpha = self.alpha - self.decrement
       end
 
-      self.mean_sparsity = (sparsity * self.alpha
-                            + self.mean_sparsity
-                            * (1 - self.alpha))
+      self.mean_sparsity:mul(1-self.alpha):add(self.alpha, sparsity)
    end
    
    return self.output
