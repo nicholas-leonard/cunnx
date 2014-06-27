@@ -42,6 +42,7 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha_range, std)
    self.noise = torch.Tensor()
    self.activated = torch.Tensor()
    self.sparsity = torch.Tensor()
+   self.threshold_delta = torch.Tensor()
    
    self.batchSize = 0
 end
@@ -91,18 +92,14 @@ end
 
 
 function NoisyReLU:updateGradInput(input, gradOutput)
-
-   local activated = torch.Tensor():resizeAs(input)
-   for i=1,input:size(1) do 
-      activated[i] = torch.gt(input[i], self.threshold)
-   end
    
-   self.gradInput = torch.cmul(gradOutput, activated)
+   self.gradInput:copy(gradOutput):cmul(self.activated)
    
    -- update threshold, raise the threshold if the training 
    -- activeness is larger than the desired activeness
-   self.threshold = ((self.mean_sparsity - self.sparsityFactor) * self.threshold_lr 
-                      + self.threshold)
+   self.threshold_delta:copy(self.mean_sparsity)
+   self.threshold_delta:add(-self.sparsity_factor)
+   self.threshold:add(self.threshold_lr, self.threshold_delta)
    return self.gradInput
 end
 
