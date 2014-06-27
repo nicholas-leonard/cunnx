@@ -413,6 +413,25 @@ function cunnxtest.BlockSparse_dense()
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
 end
 
+function cunnxtest.BlockMixture()
+   local inputSize = 10
+   local nBlock = {300, 300}
+   local hiddenSize = {32, 32}
+   local windowSize = {8, 8}
+   local outputSize = 11
+   local batchSize = 256
+   
+   local experts = {
+      nn.BlockSparse(1, inputSize, nBlock[1], hiddenSize[1]),
+      nn.BlockSparse(nBlock[1], hiddenSize[1], nBlock[2], hiddenSize[2]),
+      nn.BlockSparse(nBlock[2], hiddenSize[2], 1, outputSize)
+   }
+   
+   local gater = 
+   
+   local bm = nn.BlockMixture(experts, gater)
+end
+
 function cunnxtest.WindowSparse()
    local inputSize = 32
    local outputSize = 32

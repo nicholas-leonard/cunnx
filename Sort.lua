@@ -2,7 +2,7 @@ local Sort, parent = torch.class('nn.Sort', 'nn.Module')
 ------------------------------------------------------------------------
 --[[ Sort ]]--
 -- Applies torch.sort along dimension dim to the input.
--- Returns a table of {sortedInputs, sortedIndices}
+-- Returns a table of {sortedIndices, sortedInputs}
 -- Used with BlockSparse
 ------------------------------------------------------------------------
 
@@ -15,7 +15,7 @@ function Sort:__init(dim, descending)
    self.indice = torch.LongTensor()
    self._output = torch.Tensor()
    self._input = torch.Tensor()
-   self.output = {self._output, self.indice}
+   self.output = {self.indice, self._output}
    self._cuda = false
 end
 
@@ -40,7 +40,7 @@ function Sort:updateGradInput(input, gradOutput)
    local dim = self.notDim
    self.gradInput:resizeAs(input)
    for i=1,input:size(dim) do
-      self.gradInput:select(dim, i):indexCopy(1, self.indice:select(dim, i), gradOutput[1]:select(dim, i))
+      self.gradInput:select(dim, i):indexCopy(1, self.indice:select(dim, i), gradOutput[2]:select(dim, i))
    end
    return self.gradInput
 end
@@ -50,14 +50,14 @@ function Sort:type(type)
    if (type ~= 'torch.CudaTensor') then
       self._output = self._output:type(type)
       self._input = self._input:type(type)
-      self.output = {self._output, self.indice}
+      self.output = {self.indice, self._output}
    else
       self._cuda = true
       self._output = self._output:float()
       self._input = self._input:float()
       self._outputCuda = torch.CudaTensor()
       self._indiceCuda = torch.CudaTensor()
-      self.output = {self._outputCuda, self.indiceCuda}
+      self.output = {self.indiceCuda, self._outputCuda}
    end
 end
 
