@@ -417,19 +417,41 @@ function cunnxtest.BlockMixture()
    local inputSize = 10
    local nBlock = {300, 300}
    local hiddenSize = {32, 32}
+   local gaterSize = 20
    local windowSize = {8, 8}
    local outputSize = 11
    local batchSize = 256
    
+   -- experts
    local experts = {
       nn.BlockSparse(1, inputSize, nBlock[1], hiddenSize[1]),
       nn.BlockSparse(nBlock[1], hiddenSize[1], nBlock[2], hiddenSize[2]),
       nn.BlockSparse(nBlock[2], hiddenSize[2], 1, outputSize)
    }
    
-   local gater = 
+   -- gaters
+   local gater = nn.Sequential()
+   gater:add(nn.Linear(inputSize, gaterSize))
+   gater:add(nn.Tanh())
+   local concat = nn.ConcatTable()
+   local subGater1 = nn.Sequential()
+   subGater1:add(nn.Linear(gaterSize, nBlock[1]))
+   subGater1:add(nn.SoftMax())
+   concat:add(subGater1)
+   local subGater2 = nn.Sequential()
+   subGater2:add(nn.Linear(gaterSize, nBlock[2]))
+   subGater2:add(nn.SoftMax())
+   concat:add(subGater2)
+   gater:add(concat)
    
+   -- mixture
    local bm = nn.BlockMixture(experts, gater)
+   
+   local input = torch.randn(batchSize, inputSize):cuda()
+   local gradOutput = torch.randn(batchSize, outputSize):cuda()
+   
+   local output = bm:forward(input)
+   local gradInput = bm:backward(input, gradOutput)
 end
 
 function cunnxtest.WindowSparse()
