@@ -26,24 +26,24 @@ function BlockMixture:updateOutput(input)
    end
    
    self.expertInputs = {{input, self.gaterOutputs[1]}}
-   for i, expert in ipairs(self.experts) do
-      self.expertInputs[i+1] = {expert:updateOutput(self.expertInputs[1]), self.gaterOutputs[i+1]}
+   for i=1,#self.experts - 1 do
+      self.expertInputs[i+1] = {self.experts[i]:updateOutput(self.expertInputs[i]), self.gaterOutputs[i+1]}
    end
-   self.output = self.expertsInputs[#self.expertsInputs][1]
+   self.output = self.experts[#self.experts]:updateOutput(self.expertInputs[#self.expertInputs][1])
    
    return self.output
 end
 
 function BlockMixture:updateGradInput(input, gradOutput)
-   self.expertGradOutputs = {}
-   self.expertGradOutputs[#self.experts + 1] = gradOutput
-   for i=#self.experts,1,-1 do
-      self.expertGradOutputs[i] = self.experts[i]:updateGradInput(self.expertInputs[i], self.expertGradOutputs[i+1])
+   self.expertGradInputs = {}
+   self.expertGradInputs[#self.experts] = self.experts[#self.experts]:updateGradInput(self.expertInputs[#self.expertInputs][1], gradOutput)
+   for i=#self.experts-1,1,-1 do
+      self.expertGradInputs[i] = self.experts[i]:updateGradInput(self.expertInputs[i], self.expertGradInputs[i+1][1])
    end
    
    self.gaterGradOutputs = {}
    for i=1,#self.gaterOutputs do
-      self.gaterGradOutputs[i] = self.expertGradOutputs[i][2]
+      self.gaterGradOutputs[i] = self.expertGradInputs[i][2]
    end
    if #self.experts == 2 then
       self._gradInput = self.gater:updateGradInput(input, self.gaterGradOutputs[1])
@@ -52,15 +52,16 @@ function BlockMixture:updateGradInput(input, gradOutput)
    end
    
    self.gradInput:resizeAs(input)
-   self.gradInput:copy(self.expertGradOutputs[1])
+   self.gradInput:copy(self.expertGradInputs[1][1])
    self.gradInput:add(self._gradInput)
    return self.gradInput
 end
 
-function BlockMixture:accGradParameters(inputTable, gradOutputTable, scale)
+function BlockMixture:accGradParameters(input, gradOutput, scale)
    scale = scale or 1
-   for i=#self.experts,1,-1 do
-      self.experts[i]:accGradParameters(self.expertInputs[i], self.expertGradOutputs[i+1], scale)
+   self.experts[#self.experts]:accGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, scale)
+   for i=#self.experts-1,1,-1 do
+      self.experts[i]:accGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], scale)
    end
    
    if #self.experts == 2 then
@@ -70,9 +71,10 @@ function BlockMixture:accGradParameters(inputTable, gradOutputTable, scale)
    end
 end
 
-function BlockMixture:accUpdateGradParameters(inputTable, gradOutputTable, lr)
-   for i=#self.experts,1,-1 do
-      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradOutputs[i+1], lr)
+function BlockMixture:accUpdateGradParameters(input, gradOutput, lr)
+   self.experts[#self.experts]:accUpdateGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput)
+   for i=#self.experts-1,1,-1 do
+      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], scale)
    end
    
    if #self.experts == 2 then
@@ -83,14 +85,15 @@ function BlockMixture:accUpdateGradParameters(inputTable, gradOutputTable, lr)
 end
 
 function BlockMixture:zeroGradParameters()
-   for i,module = ipairs(self.modules) do
+   for i,module in ipairs(self.modules) do
       module:zeroGradParameters()
    end
 end
 
 function BlockMixture:updateParameters(learningRate)
-   self.expert:updateParameters(learningRate)
-   self.gater:updateParameters(learningRate)
+   for i,module in ipairs(self.modules) do
+      module:updateParameters(learningRate)
+   end
 end
 
 function BlockMixture:share(mlp,...)
@@ -127,29 +130,3 @@ function BlockMixture:type(type)
    end
    self.gradInput = self.gradInput:type(type)
 end
-
-
-function BlockMixture:unpackInput(inputTable)
-   if self.mode == self.DENSE_SPARSE then
-      return inputTable, self.inputIndice
-   end 
-   return unpack(inputTable)
-end
-
-function BlockMixture:unpackGradOutput(gradOutputTable)
-   return gradOutputTable[1]
-end
-
-function BlockMixture:packGradInput(gradInput)
-   if self.mode ~= self.DENSE_SPARSE then
-      self.gradInput[1] = gradInput
-   end
-   return self.gradInput
-end
-
-function BlockMixture:packOutput(output, outputIndice)
-   self.output[1] = output
-   self.output[2] = outputIndice
-   return self.output
-end
-

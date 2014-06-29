@@ -117,8 +117,16 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
   
-  luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
-  luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  if (nInputBlock > 1) 
+  {
+    luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
+    luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  } 
+  else 
+  {
+    luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
+    luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
+  }
   luaL_argcheck(L, inputIndice->nDimension == 2, 3, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
@@ -133,7 +141,11 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   inputScale = THCudaTensor_newContiguous(inputScale);
   outputScale = THCudaTensor_newContiguous(outputScale);
   
-  THCudaTensor_resize3d(output, input->size[0], outputIndice->size[1], outputSize);
+  if (nOutputBlock > 1 )
+    THCudaTensor_resize3d(output, input->size[0], outputIndice->size[1], outputSize);
+  else
+    THCudaTensor_resize2d(output, input->size[0], outputSize);
+  
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
@@ -298,8 +310,16 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_gradInput", "torch.CudaTensor");
   THCudaTensor *gradOutputScale = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradOutputScale", "torch.CudaTensor");
   
-  luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
-  luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  if (nInputBlock > 1) 
+  {
+    luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
+    luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  } 
+  else 
+  {
+    luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
+    luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
+  }
   luaL_argcheck(L, inputIndice->nDimension == 2, 3, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
@@ -448,8 +468,16 @@ static int cunnx_BlockSparse_accGradParameters(lua_State *L)
   THFloatTensor *inputScaleHost = (THFloatTensor*)luaT_getfieldcheckudata(L, 1, "inputScaleHost", "torch.FloatTensor");
   THFloatTensor *outputScaleHost = (THFloatTensor*)luaT_getfieldcheckudata(L, 1, "outputScaleHost", "torch.FloatTensor");
   
-  luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
-  luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  if (nInputBlock > 1) 
+  {
+    luaL_argcheck(L, input->nDimension == 3, 2, "3D(batch mode) tensor expected");
+    luaL_argcheck(L, input->size[2] == inputSize, 2, "invalid input size"); 
+  } 
+  else 
+  {
+    luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
+    luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
+  }
   luaL_argcheck(L, inputIndice->nDimension == 2, 3, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");

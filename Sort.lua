@@ -57,7 +57,7 @@ function Sort:type(type)
       self._input = self._input:float()
       self._outputCuda = torch.CudaTensor()
       self._indiceCuda = torch.CudaTensor()
-      self.output = {self.indiceCuda, self._outputCuda}
+      self.output = {self._indiceCuda, self._outputCuda}
    end
 end
 

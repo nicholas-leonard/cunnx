@@ -128,12 +128,9 @@ __global__ void cunnx_WindowGate2_updateGradInput_kernel(
   int inputSize, int outputSize, int inputWindowSize, 
   int outputWindowSize, int windowStride, float c, float d, float e, float lr)
 {
-  __shared__ float buffer[WINDOWGATE2_THREADS+1];
   unsigned int tx = threadIdx.x;
   unsigned int k = blockIdx.x;
   const float *gradOutput_k = gradOutput + outputWindowSize*k;
-  const float *output_k = output + outputWindowSize*k;
-  const float *input_k = input + inputSize*k;
   float *gradInput_k = gradInput + inputSize*k;
 
   
