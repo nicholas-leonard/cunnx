@@ -460,6 +460,9 @@ function cunnxtest.BlockMixture()
    
    local output = bm:forward(input)
    local gradInput = bm:backward(input, gradOutput)
+   
+   mytester:assertTableEq(output:size():totable(), {batchSize, outputSize}, 0.000001)
+   mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputSize}, 0.000001)
 end
 
 function cunnxtest.WindowSparse()

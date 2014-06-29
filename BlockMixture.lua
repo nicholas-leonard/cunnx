@@ -45,6 +45,7 @@ function BlockMixture:updateGradInput(input, gradOutput)
    for i=1,#self.gaterOutputs do
       self.gaterGradOutputs[i] = self.expertGradInputs[i][2]
    end
+   
    if #self.experts == 2 then
       self._gradInput = self.gater:updateGradInput(input, self.gaterGradOutputs[1])
    else
