@@ -779,5 +779,5 @@ function nn.testcudax(tests)
 end
 
 -- Note that WindowSparse* tests might fail on some GPU cards.
-nn.testcudax()
+nn.testcudax({'BlockMixture'}) --'BlockSparse','Sort',
 

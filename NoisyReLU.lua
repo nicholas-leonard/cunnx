@@ -44,6 +44,7 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha_range, std)
    self.sparsity = torch.Tensor()
    self.threshold_delta = torch.Tensor()
    
+   self.train = true
    self.batchSize = 0
 end
 
@@ -63,11 +64,12 @@ function NoisyReLU:updateOutput(input)
    end
   
    self.output:copy(input)
-   self.output:add(self.noise)
+   if self.train then
+      self.output:add(self.noise)
+   end
      
    -- check if a neuron is active
-   self.activated:gt(input, self.threshold:expandAs(input))
-   
+   self.activated:gt(self.output, self.threshold:expandAs(input))
    self.output:cmul(self.activated)
 
    -- find the activeness of a neuron in each batch
@@ -79,7 +81,6 @@ function NoisyReLU:updateOutput(input)
       self.mean_sparsity:copy(self.sparsity)
       self.threshold_delta:resizeAs(self.mean_sparsity)
    else
-   
       if self.alpha - self.decrement < self.alpha_range[3] then
          self.alpha = self.alpha_range[3]
       else
