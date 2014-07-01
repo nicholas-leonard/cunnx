@@ -1,97 +1,41 @@
 #define BLOCKSPARSE_THREADS 32
-#define BLOCKSPARSE_MAXBLOCKSIZE 512
+#define BLOCKSPARSE_MAXBLOCKSIZE 1024
 #define BLOCKSPARSE_MINBLOCKSIZE 32
 #define BLOCKSPARSE_MINBLOCKS 32
-  
+#define BLOCKSPARSE_STREAMS 8
+
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
-  float *output, float *input, float *inputIndice, float *outputIndice, 
-  float *inputScale, float *outputScale, float *weight, float *bias,  
-  int inputSize, int outputSize, int nInputBlock, int nOutputBlock,
+  float *output, const float *input, const float *outputIndice, 
+  const float *outputScale, const float *bias,  
+  int outputSize, int nOutputBlock, 
   int inputWindowSize, int outputWindowSize)
 {
   __shared__ float buffer[BLOCKSPARSE_THREADS];
-  __shared__ float outputBuffer[BLOCKSPARSE_MAXBLOCKSIZE];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int k = blockIdx.x;
   
-  float *input_k = input + k*inputWindowSize*inputSize;
   float *output_k = output + k*outputWindowSize*outputSize;
-  float *inputIndice_k = inputIndice + k*inputWindowSize;
-  float *outputIndice_k = outputIndice + k*outputWindowSize;
-  float *inputScale_k = inputScale + k*inputWindowSize;
-  float *outputScale_k = outputScale + k*outputWindowSize;
+  const float *input_k = input + k*inputWindowSize*outputWindowSize*outputSize;
+  const float *outputIndice_k = outputIndice + k*outputWindowSize;
+  const float *outputScale_k = outputScale + k*outputWindowSize;
   
-  // loop through blocks
   for (int m=0; m<outputWindowSize; m++)
   {
     int outputIdx = (int)outputIndice_k[m] - 1;
     float outputScale = outputScale_k[m];
     
-    if (outputScale <= 0) // break on non-positive scale. 
-      break;
-      
-    float *blockOutput = output_k + m*outputSize;
-    float *blockBias = bias + outputIdx*outputSize;
-    
     for (int j=tx; j<outputSize; j+=i_step)
     {
-      outputBuffer[j] = blockBias[j];
+      buffer[tx] = bias[outputIdx*outputSize + j];
+          
+      for (int l=0; l<inputWindowSize; l++)
+        buffer[tx] += input_k[l*outputWindowSize*outputSize + m*outputSize + j];
+      
+      output_k[j] = outputScale*buffer[tx];
     }
-    
-    for (int l=0; l<inputWindowSize; l++)
-    {
-      int inputIdx = (int)inputIndice_k[l] - 1;
-      float inputScale = inputScale_k[l];
-      
-      if (inputScale <= 0) // break on non-positive scale. 
-        break;
-      
-      float *blockInput = input_k + l*inputSize;
-      float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-      
-      // addmv (dot products)
-      #pragma unroll 32
-      for (int j=0; j<outputSize; j++)
-      {
-        // zero buffer
-        buffer[tx] = 0;
-        
-        // multiply
-        for (int i=tx; i<inputSize; i+=i_step)
-        {
-          buffer[tx] += inputScale*blockInput[i]*blockWeight[j*inputSize + i];
-        }
-        
-        // add (reduce)
-        for (unsigned int stride = BLOCKSPARSE_THREADS >> 1; stride > 0; stride >>= 1)
-        {
-          __syncthreads();
-          if (tx < stride)
-            buffer[tx] += buffer[tx+stride];
-        }
-        
-        if (tx == 0)
-        {
-          outputBuffer[j] += buffer[0];
-        }
-        
-      }
-      
-    }
-    
-    __syncthreads();
-      
-    for (int j=tx; j<outputSize; j+=i_step)
-    {
-      blockOutput[j] = outputScale*outputBuffer[j];
-    }
-    
-    __syncthreads();
-    
   }
 }
-
 
 static int cunnx_BlockSparse_updateOutput(lua_State *L)
 { 
@@ -105,17 +49,32 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   THCudaTensor *outputIndice = (THCudaTensor*)luaT_checkudata(L, 4, "torch.CudaTensor");
   THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
   
+  int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
+  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
+  int inputWindowSize = luaT_getfieldcheckint(L, 1, "inputWindowSize");
   int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
   int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
+  int batchedGemmMax = luaT_getfieldcheckint(L, 1, "batchedGemmMax");
+  long nBatched = batchSize*inputWindowSize*outputWindowSize;
   
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   // nOutputBlock x outputSize
   THCudaTensor *bias = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "bias", "torch.CudaTensor");
+  // batchSize x inputWindowSize x outputWindowSize x outputSize
+  THCudaTensor *outputBatched = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputBatched", "torch.CudaTensor");
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
+  
+  THCudaTensor *__output__, *_output_, *output_, *weight_, *_weight_, *bias_, *_input_, *input_;
+  
+  cublasStatus_t stat;
+  cublasHandle_t handle;
+  
+  float alpha = 1;
+  float beta = 0;
   
   if (nInputBlock > 1) 
   {
@@ -131,43 +90,182 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, inputSize <= BLOCKSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
-  luaL_argcheck(L, outputSize <= BLOCKSPARSE_MAXBLOCKSIZE, 1, "inputSize is too large");
   
-  // expect contiguous inputs
-  input = THCudaTensor_newContiguous(input);
-  inputIndice = THCudaTensor_newContiguous(inputIndice);
-  outputIndice = THCudaTensor_newContiguous(outputIndice); 
-  inputScale = THCudaTensor_newContiguous(inputScale);
-  outputScale = THCudaTensor_newContiguous(outputScale);
+  THCudaTensor_resize4d(outputBatched, batchSize, inputWindowSize, outputWindowSize, outputSize);
+  
+  __output__ = THCudaTensor_new();
+  _output_ = THCudaTensor_new();
+  output_ = THCudaTensor_new();
+  weight_ = THCudaTensor_new();
+  _weight_ = THCudaTensor_new();
+  bias_ = THCudaTensor_new();
+  _input_ = THCudaTensor_new();
+  input_ = THCudaTensor_new();
   
   if (nOutputBlock > 1 )
-    THCudaTensor_resize3d(output, input->size[0], outputIndice->size[1], outputSize);
+    THCudaTensor_resize3d(output, batchSize, outputWindowSize, outputSize);
   else
-    THCudaTensor_resize2d(output, input->size[0], outputSize);
+    THCudaTensor_resize2d(output, batchSize, outputSize);
   
+  if (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax)
+  {
+    cudaStream_t streams[BLOCKSPARSE_STREAMS];
+    
+    for (int i=0; i<BLOCKSPARSE_STREAMS; i++)
+    {
+      if (cudaStreamCreate(&streams[i]) != cudaSuccess)
+        THError("error initializing stream");
+    }
+    cudaDeviceSynchronize();
+    
+    for (int i=0; i<batchSize; i++)
+    {
+      THCudaTensor_select(_input_, input, 0, i);
+      THCudaTensor_select(__output__, outputBatched, 0, i);
+      
+      for (int l=0; l<inputWindowSize; l++) 
+      {
+        int inputIdx = THLongTensor_get2d(inputIndiceHost, i, l) - 1;
+        THCudaTensor_select(_input, _input_, 0, l);
+        THCudaTensor_select(_output_, __output__, 0, l);
+        
+        for (int m=0; m<outputWindowSize; m++)
+        {
+          int outputIdx = THLongTensor_get2d(outputIndiceHost, i, m) - 1;
+          int batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize;
+          
+          THCudaTensor_select(output_, _output_, 0, m);
+          
+          THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
+          THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
+          
+          cublasSetStream(handle, streams[i%BLOCKSPARSE_STREAMS]);
+      
+      
+          stat = cublasSgemv(handle, CUBLAS_OP_T,  inputWindowSize, outputWindowSize,
+                            &alpha, (const float*)THCudaTensor_data(weight_), inputSize,
+                            (const float*)THCudaTensor_data(input_), 1,
+                            &beta, THCudaTensor_data(output_), 1);
+                            
+        }
+      }
+    }
+    
+    cublasSetStream(handle, NULL);
+    cudaDeviceSynchronize();
+    
+    for (int i=0; i<BLOCKSPARSE_STREAMS; i++)
+    {
+      if (cudaStreamDestroy(streams[i]) != cudaSuccess)
+        THError("error destroying stream");
+    }
+    
+  }
+  else
+  {  
+    THCharTensor *inputHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "inputHost", "torch.CharTensor");
+    THCharTensor *weightHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "weightHost", "torch.CharTensor");
+    THCharTensor *outputHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "outputHost", "torch.CharTensor");
+    
+    THCudaTensor *inputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "inputCuda", "torch.CudaTensor");
+    THCudaTensor *weightCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weightCuda", "torch.CudaTensor");
+    THCudaTensor *outputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputCuda", "torch.CudaTensor");
+  
+    // put output back on top of the stack
+    output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
+    
+    cublasSetStream(handle, NULL);
+    
+    THCharTensor_resize1d(inputHost, nBatched*sizeof(float*));
+    THCharTensor_resize1d(weightHost, nBatched*sizeof(float*));
+    THCharTensor_resize1d(outputHost, nBatched*sizeof(float*));
+    
+    THCudaTensor_resize1d(inputCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(weightCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(outputCuda, nBatched*sizeof(float*)/sizeof(float));
+    
+    const float **inputB = (const float **)THCharTensor_data(inputHost);
+    const float **weightB = (const float **)THCharTensor_data(weightHost);
+    float **outputB = (float **)THCharTensor_data(outputHost);
+    
+    const float **inputB_d = (const float **)THCudaTensor_data(inputCuda);
+    const float **weightB_d = (const float **)THCudaTensor_data(weightCuda);
+    float **outputB_d = (float **)THCudaTensor_data(outputCuda);
+    
+    for (int i=0; i<batchSize; i++)
+    {
+      THCudaTensor_select(_input_, input, 0, i);
+      THCudaTensor_select(__output__, outputBatched, 0, i);
+      
+      for (int l=0; l<inputWindowSize; l++) 
+      {
+        int inputIdx = THLongTensor_get2d(inputIndiceHost, i, l) - 1;
+        THCudaTensor_select(_input, _input_, 0, l);
+        THCudaTensor_select(_output_, __output__, 0, l);
+        
+        for (int m=0; m<outputWindowSize; m++)
+        {
+          int outputIdx = THLongTensor_get2d(outputIndiceHost, i, m) - 1;
+          int batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize;
+          
+          THCudaTensor_select(output_, _output_, 0, m);
+          
+          THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
+          THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
+          
+          inputB[batchedIdx] = THCudaTensor_data(input_);
+          weightB[batchedIdx] = THCudaTensor_data(weight_);
+          outputB[batchedIdx] = THCudaTensor_data(output_);
+        }
+      }
+    }
+    
+    if(cudaMemcpy(inputB_d, inputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    if(cudaMemcpy(weightB_d, weightB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    if(cudaMemcpy(outputB_d, outputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    
+                  
+    stat = cublasSgemmBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                             outputWindowSize, 1, inputWindowSize,
+                             &alpha, weightB_d, inputSize, 
+                             inputB_d, inputWindowSize, 
+                             &beta, outputB_d, outputWindowSize, 
+                             batchSize);
+    
+    if (stat != CUBLAS_STATUS_SUCCESS) 
+      THError("cublasSgemmBatched failed");
+    
+  }
   
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateOutput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(output), THCudaTensor_data(input), 
-    THCudaTensor_data(inputIndice), THCudaTensor_data(outputIndice),
-    THCudaTensor_data(inputScale), THCudaTensor_data(outputScale),
-    THCudaTensor_data(weight), THCudaTensor_data(bias),  
-    inputSize, outputSize, nInputBlock, nOutputBlock,
-    inputIndice->size[1], outputIndice->size[1]
+    THCudaTensor_data(output), THCudaTensor_data(outputBatched), 
+    THCudaTensor_data(outputIndice), THCudaTensor_data(outputScale),
+    THCudaTensor_data(bias),  outputSize, nOutputBlock,
+    inputWindowSize, outputWindowSize
   );
+  
+  cublasDestroy(handle);
+  THCublasCheck();  
+  
+  THCudaTensor_free(_input_);
+  THCudaTensor_free(input_);
+  THCudaTensor_free(weight_);
+  THCudaTensor_free(_weight_);
+  THCudaTensor_free(__output__);
+  THCudaTensor_free(_output_);
+  THCudaTensor_free(output_);
+  THCudaTensor_free(bias_);
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
-  
-  THCudaTensor_free(input);
-  THCudaTensor_free(inputIndice);
-  THCudaTensor_free(outputIndice);
-  THCudaTensor_free(inputScale);
-  THCudaTensor_free(outputScale);
+
   return 1;
 }
 

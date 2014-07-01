@@ -34,17 +34,26 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, ma
    
    self.updates = {}
    
+   -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
+   -- cublasSgemmBatched. If errors, set this to 100000
+   self.batchedGemmMax = 200
+   
    -- for dense inputs or outputs
    self.inputIndice = torch.Tensor()
    self.outputIndice = torch.Tensor()
    self.inputScale = torch.Tensor()
    self.outputScale = torch.Tensor()
-   -- for cuda only
+   
+   -- for cuda
    self.inputIndiceHost = torch.IntTensor()
    self.outputIndiceHost = torch.IntTensor()
    self.inputScaleHost = torch.FloatTensor()
    self.outputScaleHost = torch.FloatTensor()
    self.paramUpdateHost = torch.IntTensor()
+   
+   self.inputHost = torch.CharTensor()
+   self.weightHost = torch.CharTensor()
+   self.outputHost = torch.CharTensor()
    
    -- for backward
    self.gradOutputScale = torch.Tensor()
@@ -74,6 +83,8 @@ function BlockSparse:updateOutput(inputTable)
       self.inputScale:resize(input:size(1),1):fill(1)
       self.outputScale:resize(input:size(1),1):fill(1)
       self.batchSize = input:size(1)
+      self.inputWindowSize = inputIndice:size(2)
+      self.outputWindowSize = outputIndice:size(2)
    end
    local output = input.nn.BlockSparse_updateOutput(
       self, input, inputIndice, outputIndice, inputScale, outputScale
@@ -185,6 +196,11 @@ function BlockSparse:type(type)
       self.gradOutputScale = self.gradOutputScale:type(type) 
       if type == 'torch.CudaTensor' then
          self.paramUpdateCuda = torch.CudaTensor()
+         self.inputCuda = torch.CudaTensor()
+         self.weightCuda = torch.CudaTensor()
+         self.outputCuda = torch.CudaTensor()
+         self.outputBatched = torch.CudaTensor()
+         self.gradInputBatched = torch.CudaTensor()
       end
    end
    return self

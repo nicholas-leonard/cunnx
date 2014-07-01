@@ -73,9 +73,9 @@ function BlockMixture:accGradParameters(input, gradOutput, scale)
 end
 
 function BlockMixture:accUpdateGradParameters(input, gradOutput, lr)
-   self.experts[#self.experts]:accUpdateGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput)
+   self.experts[#self.experts]:accUpdateGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, lr)
    for i=#self.experts-1,1,-1 do
-      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], scale)
+      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], lr)
    end
    
    if #self.experts == 2 then
