@@ -98,7 +98,7 @@ function WindowSparse:type(type)
       end
       self._output = self._output:type(type)
       self._gradInput = self._gradInput:type(type)
-      if type == 'torch.CudaTensor' do
+      if type == 'torch.CudaTensor' then
          self.inputCuda = torch.CudaTensor()
          self.weightCuda = torch.CudaTensor()
          self.biasCuda = torch.CudaTensor()

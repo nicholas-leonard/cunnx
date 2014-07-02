@@ -45,17 +45,16 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, ma
    self.outputScale = torch.Tensor()
    
    -- for cuda
-   self.inputIndiceHost = torch.IntTensor()
-   self.outputIndiceHost = torch.IntTensor()
-   self.inputScaleHost = torch.FloatTensor()
-   self.outputScaleHost = torch.FloatTensor()
+   self.inputIndiceHost = torch.LongTensor()
+   self.outputIndiceHost = torch.LongTensor()
    self.paramUpdateHost = torch.IntTensor()
    
    self.inputHost = torch.CharTensor()
    self.weightHost = torch.CharTensor()
    self.outputHost = torch.CharTensor()
    
-   -- for backward
+   -- etc
+   self._output = torch.Tensor()
    self.gradOutputScale = torch.Tensor()
    self._gradInput = torch.Tensor()
    self.gradInput = {}
@@ -89,7 +88,8 @@ function BlockSparse:updateOutput(inputTable)
    local output = input.nn.BlockSparse_updateOutput(
       self, input, inputIndice, outputIndice, inputScale, outputScale
    )
-   return self:packOutput(output, outputIndice, outputScale)
+   self.output = self:packOutput(output, outputIndice, outputScale)
+   return self.output
 end
 
 function BlockSparse:updateGradInput(inputTable, gradOutputTable)
@@ -186,7 +186,7 @@ function BlockSparse:type(type)
       self.bias = self.bias:type(type)
       self.gradWeight = self.gradWeight:type(type)
       self.gradBias = self.gradBias:type(type)
-      self.output = self.output:type(type)
+      self._output = self._output:type(type)
       self._gradInput = self._gradInput:type(type)
       
       self.inputIndice = self.inputIndice:type(type)  

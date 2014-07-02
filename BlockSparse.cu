@@ -3,7 +3,7 @@
 #define BLOCKSPARSE_MINBLOCKSIZE 32
 #define BLOCKSPARSE_MINBLOCKS 32
 #define BLOCKSPARSE_STREAMS 8
-
+  
 __global__ void cunnx_BlockSparse_updateOutput_kernel(
   float *output, const float *input, const float *outputIndice, 
   const float *outputScale, const float *bias,  
@@ -32,7 +32,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
       for (int l=0; l<inputWindowSize; l++)
         buffer[tx] += input_k[l*outputWindowSize*outputSize + m*outputSize + j];
       
-      output_k[j] = outputScale*buffer[tx];
+      output_k[m*outputSize + j] = outputScale*buffer[tx];
     }
   }
 }
@@ -52,13 +52,15 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
-  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
   int inputWindowSize = luaT_getfieldcheckint(L, 1, "inputWindowSize");
+  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
   int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
   int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
   int batchedGemmMax = luaT_getfieldcheckint(L, 1, "batchedGemmMax");
   long nBatched = batchSize*inputWindowSize*outputWindowSize;
   
+  THLongTensor *inputIndiceHost = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "inputIndiceHost", "torch.LongTensor");
+  THLongTensor *outputIndiceHost = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceHost", "torch.LongTensor");
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
   // nOutputBlock x outputSize
@@ -66,9 +68,9 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   // batchSize x inputWindowSize x outputWindowSize x outputSize
   THCudaTensor *outputBatched = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputBatched", "torch.CudaTensor");
   // batchSize x outputWindowSize x outputSize
-  THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
+  THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   
-  THCudaTensor *__output__, *_output_, *output_, *weight_, *_weight_, *bias_, *_input_, *input_;
+  THCudaTensor *__output__, *_output_, *output_, *weight_, *_weight_, *_input_, *input_;
   
   cublasStatus_t stat;
   cublasHandle_t handle;
@@ -92,22 +94,31 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
   
   THCudaTensor_resize4d(outputBatched, batchSize, inputWindowSize, outputWindowSize, outputSize);
+  THLongTensor_resize2d(inputIndiceHost, batchSize, inputWindowSize);
+  THLongTensor_resize2d(outputIndiceHost, batchSize, outputWindowSize);
+  
+  THLongTensor_copyCuda(inputIndiceHost, inputIndice);
+  THLongTensor_copyCuda(outputIndiceHost, outputIndice);
+  
+  stat = cublasCreate(&handle);
+  if (stat != CUBLAS_STATUS_SUCCESS) 
+    THError("CUBLAS initialization failed");
   
   __output__ = THCudaTensor_new();
   _output_ = THCudaTensor_new();
   output_ = THCudaTensor_new();
   weight_ = THCudaTensor_new();
   _weight_ = THCudaTensor_new();
-  bias_ = THCudaTensor_new();
   _input_ = THCudaTensor_new();
   input_ = THCudaTensor_new();
   
-  if (nOutputBlock > 1 )
+  if ( nOutputBlock > 1 )
     THCudaTensor_resize3d(output, batchSize, outputWindowSize, outputSize);
   else
     THCudaTensor_resize2d(output, batchSize, outputSize);
   
-  if (sqrt(inputWindowSize*outputWindowSize) > batchedGemmMax)
+  /* streamed or batched */
+  if (sqrt(inputSize*outputSize) > batchedGemmMax)
   {
     cudaStream_t streams[BLOCKSPARSE_STREAMS];
     
@@ -126,26 +137,26 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
       for (int l=0; l<inputWindowSize; l++) 
       {
         int inputIdx = THLongTensor_get2d(inputIndiceHost, i, l) - 1;
-        THCudaTensor_select(_input, _input_, 0, l);
+        THCudaTensor_select(input_, _input_, 0, l);
         THCudaTensor_select(_output_, __output__, 0, l);
         
         for (int m=0; m<outputWindowSize; m++)
         {
           int outputIdx = THLongTensor_get2d(outputIndiceHost, i, m) - 1;
-          int batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize;
-          
           THCudaTensor_select(output_, _output_, 0, m);
           
-          THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
-          THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
+          THCudaTensor_select(_weight_, weight, 1, inputIdx);
+          THCudaTensor_select(weight_, _weight_, 0, outputIdx);
           
           cublasSetStream(handle, streams[i%BLOCKSPARSE_STREAMS]);
       
-      
-          stat = cublasSgemv(handle, CUBLAS_OP_T,  inputWindowSize, outputWindowSize,
+          stat = cublasSgemv(handle, CUBLAS_OP_T,  inputSize, outputSize,
                             &alpha, (const float*)THCudaTensor_data(weight_), inputSize,
                             (const float*)THCudaTensor_data(input_), 1,
                             &beta, THCudaTensor_data(output_), 1);
+                            
+          if (stat != CUBLAS_STATUS_SUCCESS) 
+            THError("cublasSgemv failed");
                             
         }
       }
@@ -200,18 +211,18 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
       for (int l=0; l<inputWindowSize; l++) 
       {
         int inputIdx = THLongTensor_get2d(inputIndiceHost, i, l) - 1;
-        THCudaTensor_select(_input, _input_, 0, l);
+        THCudaTensor_select(input_, _input_, 0, l);
         THCudaTensor_select(_output_, __output__, 0, l);
         
         for (int m=0; m<outputWindowSize; m++)
         {
           int outputIdx = THLongTensor_get2d(outputIndiceHost, i, m) - 1;
-          int batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize;
+          int batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize + m;
           
           THCudaTensor_select(output_, _output_, 0, m);
           
-          THCudaTensor_narrow(_weight_, weight, 1, inputIdx, inputWindowSize);
-          THCudaTensor_narrow(weight_, _weight_, 0, outputIdx, outputWindowSize);
+          THCudaTensor_select(_weight_, weight, 1, inputIdx);
+          THCudaTensor_select(weight_, _weight_, 0, outputIdx);
           
           inputB[batchedIdx] = THCudaTensor_data(input_);
           weightB[batchedIdx] = THCudaTensor_data(weight_);
@@ -220,20 +231,19 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
       }
     }
     
-    if(cudaMemcpy(inputB_d, inputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+    if(cudaMemcpy(inputB_d, inputB, sizeof(float*) * nBatched, cudaMemcpyHostToDevice) != cudaSuccess)
       THError("cudaMemcpy failed");
-    if(cudaMemcpy(weightB_d, weightB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+    if(cudaMemcpy(weightB_d, weightB, sizeof(float*) * nBatched, cudaMemcpyHostToDevice) != cudaSuccess)
       THError("cudaMemcpy failed");
-    if(cudaMemcpy(outputB_d, outputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+    if(cudaMemcpy(outputB_d, outputB, sizeof(float*) * nBatched, cudaMemcpyHostToDevice) != cudaSuccess)
       THError("cudaMemcpy failed");
     
-                  
     stat = cublasSgemmBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N,
-                             outputWindowSize, 1, inputWindowSize,
+                             outputSize, 1, inputSize,
                              &alpha, weightB_d, inputSize, 
-                             inputB_d, inputWindowSize, 
-                             &beta, outputB_d, outputWindowSize, 
-                             batchSize);
+                             inputB_d, inputSize, 
+                             &beta, outputB_d, outputSize, 
+                             nBatched);
     
     if (stat != CUBLAS_STATUS_SUCCESS) 
       THError("cublasSgemmBatched failed");
@@ -260,7 +270,6 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   THCudaTensor_free(__output__);
   THCudaTensor_free(_output_);
   THCudaTensor_free(output_);
-  THCudaTensor_free(bias_);
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
