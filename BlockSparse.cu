@@ -92,6 +92,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
   
   THCudaTensor_resize4d(outputBatched, batchSize, inputWindowSize, outputWindowSize, outputSize);
   THLongTensor_resize2d(inputIndiceHost, batchSize, inputWindowSize);
@@ -203,31 +204,29 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
     const float **weightB_d = (const float **)THCudaTensor_data(weightCuda);
     float **outputB_d = (float **)THCudaTensor_data(outputCuda);
     
+
     for (int i=0; i<batchSize; i++)
     {
-      THCudaTensor_select(_input_, input, 0, i);
-      THCudaTensor_select(__output__, outputBatched, 0, i);
+      float *inputPtr = THCudaTensor_data(input)+i*input->stride[0];
+      float *outputPtr = THCudaTensor_data(outputBatched)+i*outputBatched->stride[0];
+      long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
+      long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
       
       for (int l=0; l<inputWindowSize; l++) 
-      {
-        int inputIdx = THLongTensor_get2d(inputIndiceHost, i, l) - 1;
-        THCudaTensor_select(input_, _input_, 0, l);
-        THCudaTensor_select(_output_, __output__, 0, l);
-        
+      {              
         for (int m=0; m<outputWindowSize; m++)
         {
-          int outputIdx = THLongTensor_get2d(outputIndiceHost, i, m) - 1;
-          int batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize + m;
-          
-          THCudaTensor_select(output_, _output_, 0, m);
-          
-          THCudaTensor_select(_weight_, weight, 1, inputIdx);
-          THCudaTensor_select(weight_, _weight_, 0, outputIdx);
-          
-          inputB[batchedIdx] = THCudaTensor_data(input_);
-          weightB[batchedIdx] = THCudaTensor_data(weight_);
-          outputB[batchedIdx] = THCudaTensor_data(output_);
+          long batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize + m;
+
+          inputB[batchedIdx] = inputPtr;
+          weightB[batchedIdx] = THCudaTensor_data(weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0];
+          outputB[batchedIdx] = outputPtr;
+
+          outputPtr += output->stride[2];
         }
+        
+        inputPtr += input->stride[1];
+        outputPtr += output->stride[1];
       }
     }
     
@@ -258,7 +257,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
     THCudaTensor_data(outputIndice), THCudaTensor_data(outputScale),
     THCudaTensor_data(bias),  outputSize, nOutputBlock,
     inputWindowSize, outputWindowSize
-  );
+  ); 
   
   cublasDestroy(handle);
   THCublasCheck();  

@@ -8,6 +8,7 @@
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
 #include "cublas_v2.h"
+#include <assert.h>
 
 #define CudaAssert( expression ) \
 if ( !(expression)) { \
@@ -19,6 +20,7 @@ printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __
 #include "WindowSparse.cu"
 #include "WindowGate.cu"
 #include "WindowGate2.cu"
+
 
 LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
 
