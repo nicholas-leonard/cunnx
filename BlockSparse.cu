@@ -70,8 +70,6 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_output", "torch.CudaTensor");
   
-  THCudaTensor *__output__, *_output_, *output_, *weight_, *_weight_, *_input_, *input_;
-  
   cublasStatus_t stat;
   cublasHandle_t handle;
   
@@ -105,14 +103,6 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   if (stat != CUBLAS_STATUS_SUCCESS) 
     THError("CUBLAS initialization failed");
   
-  __output__ = THCudaTensor_new();
-  _output_ = THCudaTensor_new();
-  output_ = THCudaTensor_new();
-  weight_ = THCudaTensor_new();
-  _weight_ = THCudaTensor_new();
-  _input_ = THCudaTensor_new();
-  input_ = THCudaTensor_new();
-  
   if ( nOutputBlock > 1 )
     THCudaTensor_resize3d(output, batchSize, outputWindowSize, outputSize);
   else
@@ -132,34 +122,30 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
     
     for (int i=0; i<batchSize; i++)
     {
-      THCudaTensor_select(_input_, input, 0, i);
-      THCudaTensor_select(__output__, outputBatched, 0, i);
+      float *inputPtr = THCudaTensor_data(input)+i*input->stride[0];
+      float *outputPtr = THCudaTensor_data(outputBatched)+i*outputBatched->stride[0];
+      long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
+      long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
       
       for (int l=0; l<inputWindowSize; l++) 
-      {
-        int inputIdx = THLongTensor_get2d(inputIndiceHost, i, l) - 1;
-        THCudaTensor_select(input_, _input_, 0, l);
-        THCudaTensor_select(_output_, __output__, 0, l);
-        
+      {              
         for (int m=0; m<outputWindowSize; m++)
         {
-          int outputIdx = THLongTensor_get2d(outputIndiceHost, i, m) - 1;
-          THCudaTensor_select(output_, _output_, 0, m);
-          
-          THCudaTensor_select(_weight_, weight, 1, inputIdx);
-          THCudaTensor_select(weight_, _weight_, 0, outputIdx);
-          
           cublasSetStream(handle, streams[i%BLOCKSPARSE_STREAMS]);
       
           stat = cublasSgemv(handle, CUBLAS_OP_T,  inputSize, outputSize,
-                            &alpha, (const float*)THCudaTensor_data(weight_), inputSize,
-                            (const float*)THCudaTensor_data(input_), 1,
-                            &beta, THCudaTensor_data(output_), 1);
+                            &alpha, (const float*)THCudaTensor_data(weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0], inputSize,
+                            (const float*)inputPtr, 1,
+                            &beta, outputPtr, 1);
                             
           if (stat != CUBLAS_STATUS_SUCCESS) 
             THError("cublasSgemv failed");
-                            
+
+          outputPtr += outputBatched->stride[2];
         }
+        
+        inputPtr += input->stride[1];
+        outputPtr += outputBatched->stride[1];
       }
     }
     
@@ -222,11 +208,11 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
           weightB[batchedIdx] = THCudaTensor_data(weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0];
           outputB[batchedIdx] = outputPtr;
 
-          outputPtr += output->stride[2];
+          outputPtr += outputBatched->stride[2];
         }
         
         inputPtr += input->stride[1];
-        outputPtr += output->stride[1];
+        outputPtr += outputBatched->stride[1];
       }
     }
     
@@ -262,108 +248,34 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   cublasDestroy(handle);
   THCublasCheck();  
   
-  THCudaTensor_free(_input_);
-  THCudaTensor_free(input_);
-  THCudaTensor_free(weight_);
-  THCudaTensor_free(_weight_);
-  THCudaTensor_free(__output__);
-  THCudaTensor_free(_output_);
-  THCudaTensor_free(output_);
-  
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
 
   return 1;
 }
-
-
   
-__global__ void cunnx_BlockSparse_updateGradInput_kernel(
-  float *gradInput, float* gradOutputScale, float *gradOutput, 
-  float *output, float *inputIndice, float *outputIndice, 
-  float *inputScale, float *outputScale, float *weight,  
-  int inputSize, int outputSize, int nInputBlock, int nOutputBlock,
-  int inputWindowSize, int outputWindowSize)
+__global__ void cunnx_BlockSparse_updateGradOutput_kernel(
+  float *_gradOutput, float* gradOutputScale, const float *gradOutput, 
+  const float *output, const float *outputScale, int outputWindowSize)
 {
   __shared__ float buffer[BLOCKSPARSE_THREADS];
-  __shared__ float gradInputBuffer[BLOCKSPARSE_MAXBLOCKSIZE];
   int tx = threadIdx.x;
   int i_step = blockDim.x;
   int k = blockIdx.x;
   
-  float *gradInput_k = gradInput + k*inputWindowSize*inputSize;
+  float *_gradOutput_k = _gradOutput + k*outputWindowSize*outputSize;
   float *gradOutput_k = gradOutput + k*outputWindowSize*outputSize;
   float *output_k = output + k*outputWindowSize*outputSize;
-  float *inputIndice_k = inputIndice + k*inputWindowSize;
-  float *outputIndice_k = outputIndice + k*outputWindowSize;
-  float *inputScale_k = inputScale + k*inputWindowSize;
   float *outputScale_k = outputScale + k*outputWindowSize;
   float *gradOutputScale_k = gradOutputScale + k*outputWindowSize;
   
-  // 1. loop through blocks to get gradInput
-  for (int l=0; l<inputWindowSize; l++)
-  {
-    int inputIdx = (int)inputIndice_k[l] - 1;
-    float inputScale = inputScale_k[l];
-    
-    if (inputScale <= 0) // break on non-positive scale. 
-      break;
-    
-    float *blockGradInput = gradInput_k + l*inputSize;
-      
-    for (int j=tx; j<inputSize; j+=i_step)
-    {
-      gradInputBuffer[j] = 0;
-    }
-    
-    for (int m=0; m<outputWindowSize; m++)
-    {
-      int outputIdx = (int)outputIndice_k[m] - 1;
-      float outputScale = outputScale_k[m];
-      
-      if (outputScale <= 0) // break on non-positive scale. 
-        break;
-        
-      float *blockGradOutput = gradOutput_k + m*outputSize;     
-      float *blockWeight = weight + outputIdx*nInputBlock*outputSize*inputSize + inputIdx*outputSize*inputSize;
-      
-      // addmv (dot products)
-      for (int i=tx; i<inputSize; i+=i_step)
-      {
-       // zero buffer
-        buffer[tx] = 0;
-        
-        for (int j=0; j<outputSize; j++)
-        {
-          // multiply
-          buffer[tx] += blockGradOutput[j]*blockWeight[j*inputSize + i]*outputScale;
-        }
-        
-        // accumulate 
-        gradInputBuffer[i] += buffer[tx];
-      }
-      
-    }
-    
-    __syncthreads();
-      
-    for (int i=tx; i<inputSize; i+=i_step)
-    {
-      blockGradInput[i] = gradInputBuffer[i];
-    }
-    
-    __syncthreads();
-    
-  }
-  
-  // 2. get gradients for outputScale (to be backwarded to a Gater)
+  // get gradients for outputScale (to be backwarded to a Gater)
   for (int m=0; m<outputWindowSize; m++)
   {
     float outputScale = outputScale_k[m];
-    if (outputScale <= 0) // break on non-positive scale. 
-      break;
-      
+    
+    float *_blockGradOutput = _gradOutput_k + m*outputSize;  
     float *blockGradOutput = gradOutput_k + m*outputSize;
     float *blockOutput = output_k + m*outputSize;
     
@@ -371,7 +283,9 @@ __global__ void cunnx_BlockSparse_updateGradInput_kernel(
     
     for (int j=tx; j<outputSize; j+=i_step)
     {
-      buffer[tx] += blockOutput[j]*blockGradOutput[j];
+      float grad = blockGradOutput[j]
+      buffer[tx] += blockOutput[j]*grad;
+      _blockGradOutput[j] = grad*outputScale;
     }
     
     // add (reduce)
@@ -383,15 +297,39 @@ __global__ void cunnx_BlockSparse_updateGradInput_kernel(
     }
     
     if (tx == 0)
+      gradOutputScale_k[m] = buffer[0]/outputScale;
+  }
+}
+
+__global__ void cunnx_BlockSparse_updateGradInput_kernel(
+  float *gradInput, const float *gradOutput, int inputSize, 
+  int inputWindowSize, int outputWindowSize)
+{
+  __shared__ float buffer[BLOCKSPARSE_THREADS];
+  int tx = threadIdx.x;
+  int i_step = blockDim.x;
+  int k = blockIdx.x;
+  
+  float *gradInput_k = gradInput + k*inputWindowSize*inputSize;
+  const float *gradOutput_k = gradOutput + k*inputWindowSize*outputWindowSize*inputSize;
+  
+  for (int l=0; l<inputWindowSize; l++)
+  {
+    for (int i=tx; j<inputSize; i+=i_step)
     {
-      gradOutputScale_k[m] = buffer[0];
+      buffer[tx] = 0;
+          
+      for (int m=0; m<outputWindowSize; m++)
+        buffer[tx] += gradOutput_k[l*outputWindowSize*inputSize + m*inputSize + i];
+      
+      gradInput_k[l*inputSize + i] = buffer[tx];
     }
   }
 }
 
 
 static int cunnx_BlockSparse_updateGradInput(lua_State *L)
-{ 
+{   
   /* input, inputIndice, outputIndice, inputScale, outputScale*/
   // batchSize x inputWindowSize x inputSize
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
@@ -405,16 +343,31 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 7, "torch.CudaTensor");
   THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
   
+  int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
   int outputSize = luaT_getfieldcheckint(L, 1, "outputSize");
+  int inputWindowSize = luaT_getfieldcheckint(L, 1, "inputWindowSize");
+  int outputWindowSize = luaT_getfieldcheckint(L, 1, "outputWindowSize");
   int nInputBlock = luaT_getfieldcheckint(L, 1, "nInputBlock");
   int nOutputBlock = luaT_getfieldcheckint(L, 1, "nOutputBlock");
+  int batchedGemmMax = luaT_getfieldcheckint(L, 1, "batchedGemmMax");
+  long nBatched = batchSize*inputWindowSize*outputWindowSize;
   
+  THLongTensor *inputIndiceHost = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "inputIndiceHost", "torch.LongTensor");
+  THLongTensor *outputIndiceHost = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceHost", "torch.LongTensor");
   // nOutputBlock x nInputBlock x outputSize x inputSize
   THCudaTensor *weight = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weight", "torch.CudaTensor");
+  // batchSize x inputWindowSize x outputWindowSize x inputSize
+  THCudaTensor *gradInputBatched = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradInputBatched", "torch.CudaTensor");
   // batchSize x outputWindowSize x outputSize
   THCudaTensor *gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_gradInput", "torch.CudaTensor");
   THCudaTensor *gradOutputScale = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradOutputScale", "torch.CudaTensor");
+  
+  cublasStatus_t stat;
+  cublasHandle_t handle;
+  
+  float alpha = 1;
+  float beta = 0;
   
   if (nInputBlock > 1) 
   {
@@ -430,40 +383,165 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
-  
-  // expect contiguous inputs
-  input = THCudaTensor_newContiguous(input);
-  inputIndice = THCudaTensor_newContiguous(inputIndice);
-  outputIndice = THCudaTensor_newContiguous(outputIndice); 
-  inputScale = THCudaTensor_newContiguous(inputScale);
-  outputScale = THCudaTensor_newContiguous(outputScale); 
-  gradOutput = THCudaTensor_newContiguous(gradOutput);
+  luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
   
   THCudaTensor_resizeAs(gradInput, input);
   THCudaTensor_resizeAs(gradOutputScale, outputScale);
-  
+  THCudaTensor_resize4d(gradInputBatched, batchSize, inputWindowSize, outputWindowSize, inputSize);
+ 
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(BLOCKSPARSE_THREADS);
-  cunnx_BlockSparse_updateGradInput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(gradInput), THCudaTensor_data(gradOutputScale), 
+  cunnx_BlockSparse_updateGradOutput_kernel<<<blocks,threads>>>(
+    THCudaTensor_data(_gradOutput), THCudaTensor_data(gradOutputScale), 
     THCudaTensor_data(gradOutput), THCudaTensor_data(output),
-    THCudaTensor_data(inputIndice), THCudaTensor_data(outputIndice), 
-    THCudaTensor_data(inputScale), THCudaTensor_data(outputScale), 
-    THCudaTensor_data(weight), inputSize, outputSize, nInputBlock, 
-    nOutputBlock, inputIndice->size[1], outputIndice->size[1]
+    THCudaTensor_data(outputScale), outputWindowSize
   );
   
   cudaError errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
     THError(cudaGetErrorString(errcode));
+    
+  stat = cublasCreate(&handle);
+  if (stat != CUBLAS_STATUS_SUCCESS) 
+    THError("CUBLAS initialization failed");
   
-  THCudaTensor_free(input);
-  THCudaTensor_free(inputIndice);
-  THCudaTensor_free(outputIndice);
-  THCudaTensor_free(inputScale);
-  THCudaTensor_free(outputScale);
-  THCudaTensor_free(gradOutput);
+  /* streamed or batched */
+  if (sqrt(inputSize*outputSize) > batchedGemmMax)
+  {
+    cudaStream_t streams[BLOCKSPARSE_STREAMS];
+    
+    for (int i=0; i<BLOCKSPARSE_STREAMS; i++)
+    {
+      if (cudaStreamCreate(&streams[i]) != cudaSuccess)
+        THError("error initializing stream");
+    }
+    cudaDeviceSynchronize();
+    
+    for (int i=0; i<batchSize; i++)
+    {
+      float *gradOutputPtr = THCudaTensor_data(_gradOutput)+i*_gradOutput->stride[0];
+      float *gradInputPtr = THCudaTensor_data(gradInputBatched)+i*gradInputBatched->stride[0];
+      long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
+      long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
+      
+      for (int l=0; l<inputWindowSize; l++) 
+      {              
+        for (int m=0; m<outputWindowSize; m++)
+        {
+          cublasSetStream(handle, streams[i%BLOCKSPARSE_STREAMS]);
+      
+          stat = cublasSgemv(handle, CUBLAS_OP_N,  inputSize, outputSize,
+                            &alpha, (const float*)THCudaTensor_data(weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0], inputSize,
+                            (const float*)gradOutputPtr, 1,
+                            &beta, gradInputPtr, 1);
+                            
+          if (stat != CUBLAS_STATUS_SUCCESS) 
+            THError("cublasSgemv failed");
+
+          gradInputPtr += gradInputBatched->stride[2];
+        }
+        
+        gradOutputPtr += _gradOutput->stride[1];
+        gradInputPtr += gradInputBatched->stride[1];
+      }
+    }
+    
+    cublasSetStream(handle, NULL);
+    cudaDeviceSynchronize();
+    
+    for (int i=0; i<BLOCKSPARSE_STREAMS; i++)
+    {
+      if (cudaStreamDestroy(streams[i]) != cudaSuccess)
+        THError("error destroying stream");
+    }
+    
+  }
+  else
+  {  
+    THCharTensor *inputHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "inputHost", "torch.CharTensor");
+    THCharTensor *weightHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "weightHost", "torch.CharTensor");
+    THCharTensor *outputHost = (THCharTensor*)luaT_getfieldcheckudata(L, 1, "outputHost", "torch.CharTensor");
+    
+    THCudaTensor *inputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "inputCuda", "torch.CudaTensor");
+    THCudaTensor *weightCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "weightCuda", "torch.CudaTensor");
+    THCudaTensor *outputCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputCuda", "torch.CudaTensor");
+    // put gradInput back on top of the stack
+    gradInput = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "_gradInput", "torch.CudaTensor");
+    gradOutputScale = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "gradOutputScale", "torch.CudaTensor");
+    
+    cublasSetStream(handle, NULL);
+    
+    THCharTensor_resize1d(inputHost, nBatched*sizeof(float*));
+    THCharTensor_resize1d(weightHost, nBatched*sizeof(float*));
+    THCharTensor_resize1d(outputHost, nBatched*sizeof(float*));
+    
+    THCudaTensor_resize1d(inputCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(weightCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(outputCuda, nBatched*sizeof(float*)/sizeof(float));
+    
+    float **gradInputB = (float **)THCharTensor_data(inputHost);
+    const float **weightB = (const float **)THCharTensor_data(weightHost);
+    const float **gradOutputB = (const float **)THCharTensor_data(outputHost);
+    
+    float **gradInputB_d = (float **)THCudaTensor_data(inputCuda);
+    const float **weightB_d = (const float **)THCudaTensor_data(weightCuda);
+    const float **gradOutputB_d = (const float **)THCudaTensor_data(outputCuda);
+    
+
+    for (int i=0; i<batchSize; i++)
+    {
+      float *gradOutputPtr = THCudaTensor_data(_gradOutput)+i*_gradOutput->stride[0];
+      float *gradInputPtr = THCudaTensor_data(gradInputBatched)+i*gradInputBatched->stride[0];
+      long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
+      long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
+      
+      for (int l=0; l<inputWindowSize; l++) 
+      {              
+        for (int m=0; m<outputWindowSize; m++)
+        {
+          long batchedIdx = i*inputWindowSize*outputWindowSize + l*outputWindowSize + m;
+
+          gradInputB[batchedIdx] = gradInputPtr;
+          weightB[batchedIdx] = THCudaTensor_data(weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0];
+          grdOutputB[batchedIdx] = gradOutputPtr;
+
+          gradInputPtr += gradInputBatched->stride[2];
+        }
+        
+        gradOutputPtr += _gradOutput->stride[1];
+        gradInputPtr += gradInputBatched->stride[1];
+      }
+    }
+    
+    if(cudaMemcpy(gradInputB_d, gradInputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    if(cudaMemcpy(weightB_d, weightB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    if(cudaMemcpy(gradOutputB_d, gradOutputB, sizeof(float*) * batchSize, cudaMemcpyHostToDevice) != cudaSuccess)
+      THError("cudaMemcpy failed");
+    
+    stat = cublasSgemmBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                             inputSize, 1, outputSize,
+                             &alpha, weightB_d, inputSize, 
+                             gradOutputB_d, outputSize, 
+                             &beta, gradInputB_d, inputSize, 
+                             nBatched);
+    
+    if (stat != CUBLAS_STATUS_SUCCESS) 
+      THError("cublasSgemmBatched failed");
+    
+  }
+  
+  /* call cudakernel */
+  cunnx_BlockSparse_updateGradInput_kernel<<<blocks,threads>>>(
+    THCudaTensor_data(gradInput), THCudaTensor_data(gradInputBatched), 
+    inputSize, inputWindowSize, outputWindowSize
+  );
+  
+  cudaError errcode = cudaGetLastError();
+  if(errcode != cudaSuccess)
+    THError(cudaGetErrorString(errcode));
 
   return 2;
 }

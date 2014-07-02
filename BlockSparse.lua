@@ -201,6 +201,7 @@ function BlockSparse:type(type)
          self.outputCuda = torch.CudaTensor()
          self.outputBatched = torch.CudaTensor()
          self.gradInputBatched = torch.CudaTensor()
+         self._gradOutput = torch.CudaTensor()
       end
    end
    return self

@@ -778,5 +778,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'BlockSparse_benchmark', 'WindowSparse_benchmark'}) --'BlockSparse','Sort',
+nn.testcudax({'BlockSparse'}) --'BlockSparse','Sort',
 
