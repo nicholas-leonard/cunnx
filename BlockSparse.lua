@@ -18,21 +18,21 @@ local BlockSparse, parent = torch.class('nn.BlockSparse', 'nn.Module')
 -- Input : {activation, {inputIndice, inputScale}}
 -- Output : tensor of activations.
 
-function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, maxNorm)
+function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, accUpdate)
    parent.__init(self)
    self.nInputBlock = nInputBlock
    self.nOutputBlock = nOutputBlock
    self.inputSize = inputSize
    self.outputSize = outputSize
-   self.maxNorm = maxNorm or 1
+   self.accUpdate = accUpdate or false
    
    self.weight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize)
    self.bias = torch.Tensor(nOutputBlock, outputSize)
    
-   self.gradWeight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize):zero()
-   self.gradBias = torch.Tensor(nOutputBlock, outputSize):zero()
-   
-   self.updates = {}
+   if not self.accUpdate then
+      self.gradWeight = torch.Tensor(nOutputBlock, nInputBlock, outputSize, inputSize):zero()
+      self.gradBias = torch.Tensor(nOutputBlock, outputSize):zero()
+   end
    
    -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
    -- cublasSgemmBatched. If errors, set this to 100000
@@ -47,7 +47,6 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, ma
    -- for cuda
    self.inputIndiceHost = torch.LongTensor()
    self.outputIndiceHost = torch.LongTensor()
-   self.paramUpdateHost = torch.IntTensor()
    
    self.inputHost = torch.CharTensor()
    self.weightHost = torch.CharTensor()
@@ -109,55 +108,6 @@ function BlockSparse:accGradParameters(inputTable, gradOutputTable, scale)
    input.nn.BlockSparse_accGradParameters(
       self, input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale
    )
-   self.zeroed = false
-end
-
-function BlockSparse:updateParameters(learningRate, partial)
-   local maxNorm = self.maxNorm
-   if partial and self.output.nn.BlockSparse_updateParameters then
-      self.output.nn.BlockSparse_updateParameters(self, learningRate)
-      self.bias:add(-learningRate, self.gradBias)
-      self.gradBias:zero()
-      self.zeroed = true
-      return
-   end
-   local params, gradParams = self:parameters(partial)
-   if params then
-      for k,param in pairs(params) do
-         param:add(-learningRate, gradParams[k])
-         if param:dim() == 2 and maxNorm then
-            param:renorm(2,1,maxNorm)
-         end
-      end
-   end
-end
-
--- when static is true, return parameters with static keys
--- i.e. keys that don't change from batch to batch
-function BlockSparse:parameters(static)
-   local params, grads = {}, {}
-   local updated = false
-   for inputIdx, updates in pairs(self.updates) do
-      for outputIdx, scale in pairs(updates) do
-         if static then
-            local weightId = {inputIdx, outputIdx}
-            params[weightId] = self.weight[outputIdx][inputIdx]
-            grads[weightId] = self.gradWeight[outputIdx][inputIdx]
-            params[outputIdx] = self.bias[outputIdx]
-            grads[outputIdx] = self.gradBias[outputIdx]
-         else
-            table.insert(params, self.weight[outputIdx][inputIdx])
-            table.insert(params, self.bias[outputIdx])
-            table.insert(grads, self.gradWeight[outputIdx][inputIdx])
-            table.insert(grads, self.gradBias[outputIdx])
-         end
-         updated = true
-      end
-   end
-   if not updated then
-      return {self.weight, self.bias}, {self.gradWeight, self.gradBias}
-   end
-   return params, grads
 end
 
 function BlockSparse:getBlockParameters(inputIdx, outputIdx)
@@ -168,24 +118,14 @@ function BlockSparse:getBlockParameters(inputIdx, outputIdx)
    return {weight, bias}, {gradWeight, gradBias}
 end
 
-function BlockSparse:zeroGradParameters(partial)
-   if partial and self.zeroed then
-      self.updates = {}
-      return
-   end
-   local _,gradParams = self:parameters(partial)
-   for k,gradParam in pairs(gradParams) do
-      gradParam:zero()
-   end
-   self.updates = {}
-end
-
 function BlockSparse:type(type)
    if type and (type == 'torch.FloatTensor' or type == 'torch.DoubleTensor' or type == 'torch.CudaTensor') then
       self.weight = self.weight:type(type)
       self.bias = self.bias:type(type)
-      self.gradWeight = self.gradWeight:type(type)
-      self.gradBias = self.gradBias:type(type)
+      if not self.accUpdate then
+         self.gradWeight = self.gradWeight:type(type)
+         self.gradBias = self.gradBias:type(type)
+      end
       self._output = self._output:type(type)
       self._gradInput = self._gradInput:type(type)
       
@@ -195,7 +135,6 @@ function BlockSparse:type(type)
       self.outputScale = self.outputScale:type(type) 
       self.gradOutputScale = self.gradOutputScale:type(type) 
       if type == 'torch.CudaTensor' then
-         self.paramUpdateCuda = torch.CudaTensor()
          self.inputCuda = torch.CudaTensor()
          self.weightCuda = torch.CudaTensor()
          self.outputCuda = torch.CudaTensor()

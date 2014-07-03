@@ -8,8 +8,6 @@
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
 #include "cublas_v2.h"
-#include <assert.h>
-
 #define CudaAssert( expression ) \
 if ( !(expression)) { \
 printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
