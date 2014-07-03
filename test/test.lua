@@ -6,7 +6,7 @@ require 'cunnx'
 local cunnxtest = {}
 local precision_forward = 1e-6
 local precision_backward = 1e-6
-local nloop = 200
+local nloop = 50
 local times = {}
 local cunntestx = {}
 
@@ -362,21 +362,37 @@ function cunnxtest.BlockSparse_dense()
 end
 
 function cunnxtest.BlockMixture()
-   local inputSize = 10
-   local nBlock = {100, 100}
+   local inputSize = 1024
+   local nBlock = {384, 384}
    local hiddenSize = {32, 32}
-   local gaterSize = 20
+   local gaterSize = 256
    local windowSize = {8, 8}
-   local outputSize = 11
-   local batchSize = 5
+   local outputSize = 256
+   local batchSize = 128
+   
+   local gaterCapacity = (inputSize+torch.Tensor(nBlock):sum())*gaterSize   
    
    -- experts
-   local experts = {
-      nn.BlockSparse(1, inputSize, nBlock[1], hiddenSize[1]),
-      nn.BlockSparse(nBlock[1], hiddenSize[1], nBlock[2], hiddenSize[2]),
-      nn.BlockSparse(nBlock[2], hiddenSize[2], 1, outputSize)
-   }
+   local experts = {}
+   local para = nn.ParallelTable()
+   para:add(nn.Tanh())
+   para:add(nn.Identity())
    
+   local expert = nn.Sequential()
+   expert:add(nn.BlockSparse(1, inputSize, nBlock[1], hiddenSize[1], true))
+   expert:add(para)
+   table.insert(experts, expert)
+   
+   expert = nn.Sequential()
+   expert:add(nn.BlockSparse(nBlock[1], hiddenSize[1], nBlock[2], hiddenSize[2], true))
+   expert:add(para:clone())
+   table.insert(experts, expert)
+   
+   expert = nn.Sequential()
+   expert:add(nn.BlockSparse(nBlock[2], hiddenSize[2], 1, outputSize, true))
+   expert:add(nn.Tanh())
+   table.insert(experts, expert)
+  
    -- gaters
    local gater = nn.Sequential()
    gater:add(nn.Linear(inputSize, gaterSize))
@@ -407,10 +423,72 @@ function cunnxtest.BlockMixture()
    local gradOutput = torch.randn(batchSize, outputSize):cuda()
    
    local output = bm:forward(input)
-   local gradInput = bm:backward(input, gradOutput)
+   local gradInput = bm:backwardUpdate(input, gradOutput, 0.1)
    
    mytester:assertTableEq(output:size():totable(), {batchSize, outputSize}, 0.000001)
    mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputSize}, 0.000001)
+   
+   local tm, tm2 = {}, {}
+   times['BlockMixture vs full dense'] = tm
+   times['BlockMixture vs partial dense'] = tm2
+   
+   cutorch.synchronize()
+   local a = torch.Timer()
+   for i=1,nloop do
+      local outputTable = bm:forward(input)
+      bm:backwardUpdate(input, gradOutput, 0.1)
+      --bm:updateGradInput(input, gradOutput)
+      --bm:accGradParameters(input, gradOutput)
+   end
+   cutorch.synchronize()
+   
+   tm.gpu = a:time().real
+   tm2.gpu = a:time().real
+   print("BlockMixture time :", tm.gpu)
+   bs = nil
+   collectgarbage()
+   
+   local mlp = nn.Sequential()
+   mlp:add(nn.Linear(inputSize, nBlock[1]*hiddenSize[1]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(nBlock[1]*hiddenSize[1], nBlock[2]*hiddenSize[2]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(nBlock[2]*hiddenSize[2], outputSize))
+   mlp:add(nn.Tanh())
+   mlp:cuda()
+   local input3 = torch.randn(batchSize, inputSize):cuda()
+   local gradOutput3 = torch.randn(batchSize, outputSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, 0.1)
+   end
+   cutorch.synchronize()
+   tm.cpu = a:time().real
+   
+   mlp = nn.Sequential()
+   mlp:add(nn.Linear(inputSize, windowSize[1]*hiddenSize[1]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(windowSize[1]*hiddenSize[1], windowSize[2]*hiddenSize[2]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(windowSize[2]*hiddenSize[2], outputSize))
+   mlp:add(nn.Tanh())
+   mlp:cuda()
+   input3 = torch.randn(batchSize, inputSize):cuda()
+   gradOutput3 = torch.randn(batchSize, outputSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, 0.1)
+   end
+   cutorch.synchronize()
+   tm2.cpu = a:time().real
 end
 
 function cunnxtest.WindowSparse()
@@ -726,5 +804,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'BlockSparse', 'BlockSparse_dense'}) --, 'BlockSparse_benchmark'}) --'BlockSparse','Sort',
+nn.testcudax({'BlockSparse', 'BlockSparse_dense', 'BlockMixture', 'Sort'}) --, 'BlockSparse_benchmark'}) --'BlockSparse','Sort',
 

@@ -39,8 +39,20 @@ end
 function Sort:updateGradInput(input, gradOutput)
    local dim = self.notDim
    self.gradInput:resizeAs(input)
-   for i=1,input:size(dim) do
-      self.gradInput:select(dim, i):indexCopy(1, self.indice:select(dim, i), gradOutput[2]:select(dim, i))
+   gradOutput = gradOutput[2]
+   if self._cuda then
+      local grad
+      self._gradOutputHost:resize(gradOutput:size(1), gradOutput:size(2))
+      self._gradOutputHost:copy(gradOutput)
+      self._gradInputHost:resizeAs(self._input)
+      for i=1,input:size(dim) do
+         self._gradInputHost:select(dim, i):indexCopy(1, self.indice:select(dim, i), self._gradOutputHost:select(dim, i))
+      end
+      self.gradInput:copy(self._gradInputHost)
+   else
+      for i=1,input:size(dim) do
+         self.gradInput:select(dim, i):indexCopy(1, self.indice:select(dim, i), gradOutput:select(dim, i))
+      end
    end
    return self.gradInput
 end
@@ -57,6 +69,8 @@ function Sort:type(type)
       self._input = self._input:float()
       self._outputCuda = torch.CudaTensor()
       self._indiceCuda = torch.CudaTensor()
+      self._gradInputHost = torch.FloatTensor()
+      self._gradOutputHost = torch.FloatTensor()
       self.output = {self._indiceCuda, self._outputCuda}
    end
 end
