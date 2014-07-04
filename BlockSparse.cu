@@ -29,7 +29,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
           
       for (int l=0; l<inputWindowSize; l++)
         buffer[tx] += input_k[l*outputWindowSize*outputSize + m*outputSize + j];
-      
+
       output_k[m*outputSize + j] = outputScale*buffer[tx];
     }
   }
