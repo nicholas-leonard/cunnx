@@ -6,7 +6,7 @@ require 'cunnx'
 local cunnxtest = {}
 local precision_forward = 1e-6
 local precision_backward = 1e-6
-local nloop = 100
+local nloop = 50
 local times = {}
 local cunntestx = {}
 
@@ -106,11 +106,11 @@ end
 function cunnxtest.BlockSparse()
    local nInputBlock = 128
    local nOutputBlock = 128
-   local inputSize = 64
-   local outputSize = 64
-   local inputWindowSize = 8
-   local outputWindowSize = 8
-   local batchSize = 512
+   local inputSize = 3
+   local outputSize = 6
+   local inputWindowSize = 7
+   local outputWindowSize = 2
+   local batchSize = 5
    local lr = 0.1
    
    local input = torch.randn(batchSize,inputWindowSize,inputSize):cuda()
@@ -121,12 +121,11 @@ function cunnxtest.BlockSparse()
       inputIndice[i]:copy(torch.randperm(nInputBlock):narrow(1,1,inputWindowSize))
       outputIndice[i]:copy(torch.randperm(nOutputBlock):narrow(1,1,outputWindowSize))
    end
-   local inputScale = torch.CudaTensor(batchSize, inputWindowSize)
-   inputScale:fill(1)
-   local outputScale = torch.CudaTensor(batchSize, outputWindowSize)
-   outputScale:fill(1)   
+   local inputScale = torch.randn(batchSize, inputWindowSize):cuda()
+   --inputScale:fill(1)
+   local outputScale = torch.randn(batchSize, outputWindowSize):cuda()
+   --outputScale:fill(1)   
    local gradOutputTable = {gradOutput, {outputIndice, outputScale}}
-   
    local inputTable = {{input, {inputIndice, inputScale}}, {outputIndice, outputScale}}
    local bs = nn.BlockSparse(nInputBlock, inputSize, nOutputBlock, outputSize)
    bs:cuda()
@@ -138,126 +137,93 @@ function cunnxtest.BlockSparse()
    
    mytester:assertTableEq(output:size():totable(), {batchSize, outputWindowSize, outputSize})
    mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputWindowSize, inputSize})
-   
-   -- compare for one example
-   local exampleIdx = 3
-   local input2 = input[exampleIdx]:float()
-   local inputIndice2 = inputIndice[exampleIdx]:float():int()
-   local outputIndice2 = outputIndice[exampleIdx]:float():int()
-   local inputScale2 = inputScale[exampleIdx]:float()
-   local outputScale2 = outputScale[exampleIdx]:float()
-   local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
-   local gradOutput2 = gradOutput[exampleIdx]:float()
-   local gradInput2 = torch.FloatTensor(inputWindowSize, inputSize):zero()
-   local gradOutputScale2 = torch.FloatTensor(outputWindowSize):zero()
-   local weight2 = bs.weight:float()
-   local bias2 = bs.bias:float()
-   
-   for i=1,inputWindowSize do
-      local input_i = input2[i]
-      local inputScale = inputScale2[i]
-      input_i:mul(inputScale)
-   end
       
-   for j=1,outputWindowSize do
-      local output_j = output2[j]
-      local outputIdx = outputIndice2[j]
-      local outputScale = outputScale2[j]
-      local bias = bias2[outputIdx]
-      
-      output_j:copy(bias)
-      
-      for i=1,inputWindowSize do
-         local input_i = input2[i]
-         local inputIdx = inputIndice2[i]
-         local inputScale = inputScale2[i]
-         local weight = weight2[outputIdx][inputIdx]
+   -- compare
+   local cutoff = math.sqrt(inputSize*outputSize)
+   bs.batchedGemmMax = cutoff + 10
    
-         output_j:addmv(1, weight, input_i)
-      end
+   local message = {'batched', 'streamed'}
+   
+   for i=1,2 do
+      bs:zeroGradParameters()
       
-      output_j:mul(outputScale)
-   end   
-   
-   mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward sparse)')
-   
-   for i=1,inputWindowSize do
-      local gradInput_i = gradInput2[i]
-      local inputIdx = inputIndice2[i]
-      local inputScale = inputScale2[i]
+      local outputTable = bs:forward(inputTable)
+      local output = outputTable[1]
+      local gradInputTable = bs:backward(inputTable, gradOutputTable)
+      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
+      
+      local exampleIdx = 3
+      local input2 = input[exampleIdx]:float()
+      local inputIndice2 = inputIndice[exampleIdx]:float():int()
+      local outputIndice2 = outputIndice[exampleIdx]:float():int()
+      local inputScale2 = inputScale[exampleIdx]:float()
+      local outputScale2 = outputScale[exampleIdx]:float()
+      local output2 = torch.FloatTensor(outputWindowSize, outputSize):zero()
+      local gradOutput2 = gradOutput[exampleIdx]:float()
+      local gradInput2 = torch.FloatTensor(inputWindowSize, inputSize):zero()
+      local gradOutputScale2 = torch.FloatTensor(outputWindowSize):zero()
+      local weight2 = bs.weight:float()
+      local bias2 = bs.bias:float()
       
       for j=1,outputWindowSize do
-         local gradOutput_j = gradOutput2[j]
+         local output_j = output2[j]
          local outputIdx = outputIndice2[j]
          local outputScale = outputScale2[j]
-         local weight = weight2[outputIdx][inputIdx]
-   
-         gradInput_i:addmv(1, weight:t(), gradOutput_j)
+         local bias = bias2[outputIdx]
+         
+         output_j:copy(bias)
+         
+         for i=1,inputWindowSize do
+            local input_i = input2[i]
+            local inputIdx = inputIndice2[i]
+            local inputScale = inputScale2[i]
+            local weight = weight2[outputIdx][inputIdx]
+             
+            output_j:addmv(1, weight, input_i)
+         end
+         
+         output_j:mul(outputScale)
+      end   
+      
+      mytester:assertTensorEq(output[exampleIdx]:float(), output2, precision_forward, 'error on state (forward sparse)'..message[i])
+      
+      for i=1,inputWindowSize do
+         local gradInput_i = gradInput2[i]
+         local inputIdx = inputIndice2[i]
+         
+         for j=1,outputWindowSize do
+            local gradOutput_j = gradOutput2[j]
+            local outputIdx = outputIndice2[j]
+            local outputScale = outputScale2[j]
+            local weight = weight2[outputIdx][inputIdx]
+      
+            gradInput_i:addmv(outputScale, weight:t(), gradOutput_j)
+         end
+      end 
+      
+      mytester:assertTensorEq(gradInput[exampleIdx]:float(), gradInput2, precision_backward*10, 'error on state (backward sparse gradInput)'..message[i])
+     
+      for j=1,outputWindowSize do
+         local gradOutput_j = gradOutput2[j]
+         local outputScale = outputScale2[j]
+         local output_j = output2[j]
+         gradOutputScale2[j] = torch.cmul(gradOutput_j, output_j):div(outputScale):sum()
       end
-   end 
-   
-   mytester:assertTensorEq(gradInput[exampleIdx]:float(), gradInput2, precision_backward*10, 'error on state (backward sparse gradInput)')
-   
-   for j=1,outputWindowSize do
-      local gradOutput_j = gradOutput2[j]
-      local output_j = output2[j]
-      gradOutputScale2[j] = torch.cmul(gradOutput_j, output_j):sum()
-   end
-   
-   mytester:assertTensorEq(gradOutputScale[exampleIdx]:float(), gradOutputScale2, precision_backward, 'error on state (backward sparse gradOutputScale)')
-   
-   local updates = {}
-   for k=1,inputIndice:size(1) do
-      for i=1,inputIndice:size(2) do
-         local inputIdx = inputIndice[k][i]
-         local inputScale = inputScale[k][i]
-         
-         if inputScale <= 0 then
-            break
-         end
-         
-         local update = updates[inputIdx]
-         if not update then
-            update = {}
-            updates[inputIdx] = update
-         end
-         
-         for j=1,outputIndice:size(2) do
-            local outputIdx = outputIndice[k][j]
-            local outputScale = outputScale[k][j]
-            
-            if outputScale <= 0 then
-               break
-            end
-            
-            local count = update[outputIdx] or 0
-            count = count + 1
-            update[outputIdx] = count
-            
-         end
-         
-      end
-   end
-   
-   for inputIdx, bsUpdate in pairs(bs.updates) do
-      local update = updates[inputIdx] or {}
-      mytester:assertTableEq(update, bsUpdate, 0, 'error on updates table')
-   end
-   
-   for inputIdx, update in pairs(updates) do
-      local bsUpdate = bs.updates[inputIdx] or {}
-      mytester:assertTableEq(update, bsUpdate, 0, 'error on updates table')
+      
+      mytester:assertTensorEq(gradOutputScale[exampleIdx]:float(), gradOutputScale2, precision_backward, 'error on state (backward sparse gradOutputScale)'..message[i])
+
+      bs.batchedGemmMax = cutoff - 10
    end
 end
    
 function cunnxtest.BlockSparse_benchmark()
-   local nInputBlock = 300
-   local nOutputBlock = 300
+   local nInputBlock = 384
+   local nOutputBlock = 384
    local inputSize = 32
    local outputSize = 32
    local inputWindowSize = 8
    local outputWindowSize = 8
-   local batchSize = 256
+   local batchSize = 128
    local lr = 0.1
    
    local tm, tm2 = {}, {}
@@ -283,28 +249,16 @@ function cunnxtest.BlockSparse_benchmark()
    bs:cuda()
    bs:zeroGradParameters()
    bs:forward(inputTable)
-   
-   local gater = nn.BlockSparse(nInputBlock, inputSize, 1, nOutputBlock)
-   gater:cuda()
-   gradOutputGater = torch.randn(batchSize, nOutputBlock):cuda()
+   bs:backward(inputTable, gradOutputTable, 0.1)
    
    cutorch.synchronize()
    local a = torch.Timer()
    for i=1,nloop do
-      --gater
-      gater:zeroGradParameters(true)
-      gater:forward(inputTable)
-      gater:backward(inputTable, gradOutputGater)
-      gater:updateParameters(lr, true)
-      --experts
-      bs:zeroGradParameters(true)
       local outputTable = bs:forward(inputTable)
       local output = outputTable[1]
+      bs:backwardUpdate(inputTable, gradOutputTable, 0.1)
       --bs:updateGradInput(inputTable, gradOutputTable)
       --bs:accGradParameters(inputTable, gradOutputTable)
-      local gradInputTable = bs:backward(inputTable, gradOutputTable)  
-      local gradInput, gradOutputScale = gradInputTable[1][1], gradInputTable[2][2]
-      bs:updateParameters(lr, true) -- also zeros grad parameters
    end
    cutorch.synchronize()
    
@@ -321,13 +275,10 @@ function cunnxtest.BlockSparse_benchmark()
    mlp:forward(input3)
    a:reset()
    for i=1,nloop do
-      mlp:zeroGradParameters()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      mlp:backward(input3, gradOutput3)
-      mlp:updateParameters(lr)
-      mlp.weight:renorm(2, 1, 1)
+      mlp:backwardUpdate(input3, gradOutput3, 0.1)
    end
    cutorch.synchronize()
    tm.cpu = a:time().real
@@ -339,13 +290,10 @@ function cunnxtest.BlockSparse_benchmark()
    mlp:forward(input3)
    a:reset()
    for i=1,nloop do
-      mlp:zeroGradParameters()
       mlp:forward(input3)
       --mlp:updateGradInput(input3, gradOutput3)
       --mlp:accGradParameters(input3, gradOutput3)
-      mlp:backward(input3, gradOutput3)
-      mlp:updateParameters(lr)
-      mlp.weight:renorm(2, 1, 1)
+      mlp:backwardUpdate(input3, gradOutput3, 0.1)
    end
    cutorch.synchronize()
    tm2.cpu = a:time().real
@@ -411,6 +359,165 @@ function cunnxtest.BlockSparse_dense()
    mytester:assertTensorEq(gradInput:float():resize(batchSize, inputWindowSize*inputSize), gradInput2, precision_backward*10, 'error on state (backward dense) ')
    mytester:assertTensorEq(bs.weight:transpose(2, 3):float():resize(nOutputBlock*outputSize, nInputBlock*inputSize), mlp.weight, precision_backward*10, 'error on state (update weight dense) ')
    mytester:assertTensorEq(bs.bias:float():resize(nOutputBlock*outputSize), mlp.bias, precision_backward*10, 'error on state (update bias dense) ')
+end
+
+function cunnxtest.BlockMixture()
+   local inputSize = 256
+   local nBlock = {128, 256, 128}
+   local hiddenSize = {64, 32, 64}
+   local gaterSize = 256
+   local windowSize = {4, 8, 4}
+   local outputSize = 256
+   local batchSize = 128
+   
+   -- experts
+   local experts = {}
+   local para = nn.ParallelTable()
+   para:add(nn.Tanh())
+   para:add(nn.Identity())
+   
+   local expert = nn.Sequential()
+   expert:add(nn.BlockSparse(1, inputSize, nBlock[1], hiddenSize[1], true))
+   expert:add(para)
+   table.insert(experts, expert)
+   
+   expert = nn.Sequential()
+   expert:add(nn.BlockSparse(nBlock[1], hiddenSize[1], nBlock[2], hiddenSize[2], true))
+   expert:add(para:clone())
+   table.insert(experts, expert)
+   
+   expert = nn.Sequential()
+   expert:add(nn.BlockSparse(nBlock[2], hiddenSize[2], nBlock[3], hiddenSize[3], true))
+   expert:add(para:clone())
+   table.insert(experts, expert)
+   
+   expert = nn.Sequential()
+   expert:add(nn.BlockSparse(nBlock[3], hiddenSize[3], 1, outputSize, true))
+   expert:add(nn.Tanh())
+   table.insert(experts, expert)
+  
+   -- gaters
+   local gater = nn.Sequential()
+   gater:add(nn.Linear(inputSize, gaterSize))
+   gater:add(nn.Tanh())
+   local concat = nn.ConcatTable()
+   local subGater1 = nn.Sequential()
+   subGater1:add(nn.Linear(gaterSize, nBlock[1]))
+   subGater1:add(nn.NoisyReLU(windowSize[1]/nBlock[1]))
+   subGater1:add(nn.Sort(2,true))
+   local para = nn.ParallelTable()
+   para:add(nn.Narrow(2, 1, windowSize[1]))
+   para:add(nn.Narrow(2, 1, windowSize[2]))
+   subGater1:add(para)
+   concat:add(subGater1)
+   
+   local subGater2 = nn.Sequential()
+   subGater2:add(nn.Linear(gaterSize, nBlock[2]))
+   subGater2:add(nn.NoisyReLU(windowSize[2]/nBlock[2]))
+   subGater2:add(nn.Sort(2,true))
+   subGater2:add(para:clone())
+   concat:add(subGater2)
+   
+   local subGater3 = nn.Sequential()
+   subGater3:add(nn.Linear(gaterSize, nBlock[3]))
+   subGater3:add(nn.NoisyReLU(windowSize[3]/nBlock[3]))
+   subGater3:add(nn.Sort(2,true))
+   subGater3:add(para:clone())
+   concat:add(subGater3)
+   
+   gater:add(concat)
+   
+   -- mixture
+   local bm = nn.BlockMixture(experts, gater)
+   bm:cuda()
+   
+   local input = torch.randn(batchSize, inputSize):cuda()
+   local gradOutput = torch.randn(batchSize, outputSize):cuda()
+   
+   local output = bm:forward(input)
+   local gradInput = bm:backwardUpdate(input, gradOutput, 0.1)
+   
+   mytester:assertTableEq(output:size():totable(), {batchSize, outputSize}, 0.000001)
+   mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputSize}, 0.000001)
+   
+   local tm, tm2, tm3 = {}, {}, {}
+   times['BlockMixture vs full dense'] = tm
+   times['BlockMixture vs partial dense'] = tm2
+   times['gater vs BlockMixture'] = tm3
+   
+   cutorch.synchronize()
+   local a = torch.Timer()
+   for i=1,nloop do
+      local outputTable = bm:forward(input)
+      bm:backwardUpdate(input, gradOutput, 0.1)
+      --bm:updateGradInput(input, gradOutput)
+      --bm:accGradParameters(input, gradOutput)
+   end
+   cutorch.synchronize()
+   
+   tm.gpu = a:time().real
+   tm2.gpu = a:time().real
+   tm3.cpu = a:time().real
+   print("BlockMixture time :", tm.gpu)
+   bs = nil
+   collectgarbage()
+   
+   a:reset()
+   for i=1,nloop do
+      gater:forward(input)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      gater:backwardUpdate(input, bm.gaterGradOutputs, 0.1)
+   end
+   cutorch.synchronize()
+   tm3.gpu = a:time().real
+   print("Gater time :", tm3.gpu)
+   
+   local mlp = nn.Sequential()
+   mlp:add(nn.Linear(inputSize, nBlock[1]*hiddenSize[1]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(nBlock[1]*hiddenSize[1], nBlock[2]*hiddenSize[2]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(nBlock[2]*hiddenSize[2], nBlock[3]*hiddenSize[3]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(nBlock[3]*hiddenSize[3], outputSize))
+   mlp:add(nn.Tanh())
+   mlp:cuda()
+   local input3 = torch.randn(batchSize, inputSize):cuda()
+   local gradOutput3 = torch.randn(batchSize, outputSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, 0.1)
+   end
+   cutorch.synchronize()
+   tm.cpu = a:time().real
+   
+   mlp = nn.Sequential()
+   mlp:add(nn.Linear(inputSize, windowSize[1]*hiddenSize[1]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(windowSize[1]*hiddenSize[1], windowSize[2]*hiddenSize[2]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(windowSize[2]*hiddenSize[2], windowSize[3]*hiddenSize[3]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(windowSize[3]*hiddenSize[3], outputSize))
+   mlp:add(nn.Tanh())
+   mlp:cuda()
+   input3 = torch.randn(batchSize, inputSize):cuda()
+   gradOutput3 = torch.randn(batchSize, outputSize):cuda()
+   mlp:forward(input3)
+   a:reset()
+   for i=1,nloop do
+      mlp:forward(input3)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      mlp:backwardUpdate(input3, gradOutput3, 0.1)
+   end
+   cutorch.synchronize()
+   tm2.cpu = a:time().real
 end
 
 function cunnxtest.WindowSparse()
@@ -494,9 +601,9 @@ end
 function cunnxtest.WindowSparse_benchmark()
    local inputSize = 10000
    local outputSize = 10000
-   local inputWindowSize = 256
-   local outputWindowSize = 256
-   local batchSize = 512
+   local inputWindowSize = 512
+   local outputWindowSize = 512
+   local batchSize = 256
    --speedup is (forward only)
    -- window/batch streams + gemv     vs gemmBatched
    -- 10k/512/128: 21.9607, 0.1708    vs 10.5454 0.0837
@@ -599,11 +706,11 @@ function cunnxtest.Sort()
    local output = s:forward(input)
    local gradInput = s:backward(input, output)
    mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward float)')
-   s:double()
-   input = torch.randn(batchSize, nInput):double()
+   s:cuda()
+   input = torch.randn(batchSize, nInput):cuda()
    output = s:forward(input)
    gradInput = s:backward(input, output)
-   mytester:assertTensorEq(gradInput, input, precision_forward, 'error on state (forward/backward double)')
+   mytester:assertTensorEq(gradInput:float(), input:float(), precision_forward, 'error on state (forward/backward double)')
 end
 
 function cunnxtest.WindowGate()

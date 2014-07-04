@@ -13,12 +13,12 @@ WindowMixture.SPARSE_SPARSE = 2
 -- Note: SPARSE_DENSE is not supported (no gater is required), 
 -- just use WindowSparse + ElementTable
 
-function WindowMixture:__init(expert, gater, mode)
+function WindowMixture:__init(expert, gater, mode, mixture)
    parent.__init(self)
    self.gater = gater
    self.expert = expert
    self.mode = mode or self.SPARSE_SPARSE
-   self.cmul = nn.CMulTable()
+   self.cmul = mixture or nn.CMulTable()
    self.modules = {gater, expert, cmul}
    self.output = {}
    self._gradInput = torch.Tensor()
@@ -41,7 +41,7 @@ function WindowMixture:updateOutput(inputTable)
    self.expertInput = {input, inputIndice, self.gaterOutput[1]}
    self.expertOutput = self.expert:updateOutput(self.expertInput)
    
-   self.mixtureInput = {self.gaterOutput[2], self.expertOutput[1]}
+   self.mixtureInput = {self.expertOutput[1], self.gaterOutput[2]}
    self.mixtureOutput = self.cmul:updateOutput(self.mixtureInput)
    self:packOutput(self.mixtureOutput, self.gaterOutput[1])
    return self.output
@@ -51,8 +51,8 @@ function WindowMixture:updateGradInput(inputTable, gradOutputTable)
    local input, inputIndice = self:unpackInput(inputTable)
    local gradOutput = self:unpackGradOutput(gradOutputTable)
    self.mixtureGradInput = self.cmul:updateGradInput(self.mixtureInput, gradOutput)
-   self.expertGradInput = self.expert:updateGradInput(self.expertInput, {self.mixtureGradInput[2]})
-   self.gaterGradInput = self.gater:updateGradInput(inputTable, self.mixtureGradInput[1])
+   self.expertGradInput = self.expert:updateGradInput(self.expertInput, {self.mixtureGradInput[1]})
+   self.gaterGradInput = self.gater:updateGradInput(inputTable, self.mixtureGradInput[2])
    
    local gaterGradInput = self:unpackInput(self.gaterGradInput)
    self._gradInput:resizeAs(input)

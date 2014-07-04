@@ -32,14 +32,6 @@ function WindowSparse:__init(inputSize, outputSize, outputWindowSize, accUpdate)
    self.biasHost = torch.CharTensor()
    self.outputHost = torch.CharTensor()
    
-   self.inputCuda = torch.CudaTensor()
-   self.weightCuda = torch.CudaTensor()
-   self.biasCuda = torch.CudaTensor()
-   self.outputCuda = torch.CudaTensor()
-   
-   self.inputIndiceCuda = torch.CudaTensor()
-   self.outputIndiceCuda = torch.CudaTensor()
-   
    -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
    -- cublasSgemmBatched. If errors, set this to 100000
    self.batchedGemmMax = 200
@@ -106,6 +98,15 @@ function WindowSparse:type(type)
       end
       self._output = self._output:type(type)
       self._gradInput = self._gradInput:type(type)
+      if type == 'torch.CudaTensor' then
+         self.inputCuda = torch.CudaTensor()
+         self.weightCuda = torch.CudaTensor()
+         self.biasCuda = torch.CudaTensor()
+         self.outputCuda = torch.CudaTensor()
+         
+         self.inputIndiceCuda = torch.CudaTensor()
+         self.outputIndiceCuda = torch.CudaTensor()
+      end
    end
    return self
 end

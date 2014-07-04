@@ -8,7 +8,6 @@
 #include <thrust/functional.h>
 #include <thrust/device_ptr.h>
 #include "cublas_v2.h"
-
 #define CudaAssert( expression ) \
 if ( !(expression)) { \
 printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
@@ -18,6 +17,8 @@ printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __
 #include "BlockSparse.cu"
 #include "WindowSparse.cu"
 #include "WindowGate.cu"
+#include "WindowGate2.cu"
+
 
 LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
 
@@ -29,6 +30,7 @@ int luaopen_libcunnx(lua_State *L)
   cunnx_BlockSparse_init(L);
   cunnx_WindowSparse_init(L);
   cunnx_WindowGate_init(L);
+  cunnx_WindowGate2_init(L);
 
   return 1;
 }
