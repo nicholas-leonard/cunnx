@@ -362,15 +362,13 @@ function cunnxtest.BlockSparse_dense()
 end
 
 function cunnxtest.BlockMixture()
-   local inputSize = 1024
-   local nBlock = {384, 384}
-   local hiddenSize = {32, 32}
+   local inputSize = 256
+   local nBlock = {128, 256, 128}
+   local hiddenSize = {64, 32, 64}
    local gaterSize = 256
-   local windowSize = {8, 8}
+   local windowSize = {4, 8, 4}
    local outputSize = 256
    local batchSize = 128
-   
-   local gaterCapacity = (inputSize+torch.Tensor(nBlock):sum())*gaterSize   
    
    -- experts
    local experts = {}
@@ -389,7 +387,12 @@ function cunnxtest.BlockMixture()
    table.insert(experts, expert)
    
    expert = nn.Sequential()
-   expert:add(nn.BlockSparse(nBlock[2], hiddenSize[2], 1, outputSize, true))
+   expert:add(nn.BlockSparse(nBlock[2], hiddenSize[2], nBlock[3], hiddenSize[3], true))
+   expert:add(para:clone())
+   table.insert(experts, expert)
+   
+   expert = nn.Sequential()
+   expert:add(nn.BlockSparse(nBlock[3], hiddenSize[3], 1, outputSize, true))
    expert:add(nn.Tanh())
    table.insert(experts, expert)
   
@@ -407,12 +410,21 @@ function cunnxtest.BlockMixture()
    para:add(nn.Narrow(2, 1, windowSize[2]))
    subGater1:add(para)
    concat:add(subGater1)
+   
    local subGater2 = nn.Sequential()
    subGater2:add(nn.Linear(gaterSize, nBlock[2]))
    subGater2:add(nn.NoisyReLU(windowSize[2]/nBlock[2]))
    subGater2:add(nn.Sort(2,true))
    subGater2:add(para:clone())
    concat:add(subGater2)
+   
+   local subGater3 = nn.Sequential()
+   subGater3:add(nn.Linear(gaterSize, nBlock[3]))
+   subGater3:add(nn.NoisyReLU(windowSize[3]/nBlock[3]))
+   subGater3:add(nn.Sort(2,true))
+   subGater3:add(para:clone())
+   concat:add(subGater3)
+   
    gater:add(concat)
    
    -- mixture
@@ -428,9 +440,10 @@ function cunnxtest.BlockMixture()
    mytester:assertTableEq(output:size():totable(), {batchSize, outputSize}, 0.000001)
    mytester:assertTableEq(gradInput:size():totable(), {batchSize, inputSize}, 0.000001)
    
-   local tm, tm2 = {}, {}
+   local tm, tm2, tm3 = {}, {}, {}
    times['BlockMixture vs full dense'] = tm
    times['BlockMixture vs partial dense'] = tm2
+   times['gater vs BlockMixture'] = tm3
    
    cutorch.synchronize()
    local a = torch.Timer()
@@ -444,16 +457,30 @@ function cunnxtest.BlockMixture()
    
    tm.gpu = a:time().real
    tm2.gpu = a:time().real
+   tm3.cpu = a:time().real
    print("BlockMixture time :", tm.gpu)
    bs = nil
    collectgarbage()
+   
+   a:reset()
+   for i=1,nloop do
+      gater:forward(input)
+      --mlp:updateGradInput(input3, gradOutput3)
+      --mlp:accGradParameters(input3, gradOutput3)
+      gater:backwardUpdate(input, bm.gaterGradOutputs, 0.1)
+   end
+   cutorch.synchronize()
+   tm3.gpu = a:time().real
+   print("Gater time :", tm3.gpu)
    
    local mlp = nn.Sequential()
    mlp:add(nn.Linear(inputSize, nBlock[1]*hiddenSize[1]))
    mlp:add(nn.Tanh())
    mlp:add(nn.Linear(nBlock[1]*hiddenSize[1], nBlock[2]*hiddenSize[2]))
    mlp:add(nn.Tanh())
-   mlp:add(nn.Linear(nBlock[2]*hiddenSize[2], outputSize))
+   mlp:add(nn.Linear(nBlock[2]*hiddenSize[2], nBlock[3]*hiddenSize[3]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(nBlock[3]*hiddenSize[3], outputSize))
    mlp:add(nn.Tanh())
    mlp:cuda()
    local input3 = torch.randn(batchSize, inputSize):cuda()
@@ -474,7 +501,9 @@ function cunnxtest.BlockMixture()
    mlp:add(nn.Tanh())
    mlp:add(nn.Linear(windowSize[1]*hiddenSize[1], windowSize[2]*hiddenSize[2]))
    mlp:add(nn.Tanh())
-   mlp:add(nn.Linear(windowSize[2]*hiddenSize[2], outputSize))
+   mlp:add(nn.Linear(windowSize[2]*hiddenSize[2], windowSize[3]*hiddenSize[3]))
+   mlp:add(nn.Tanh())
+   mlp:add(nn.Linear(windowSize[3]*hiddenSize[3], outputSize))
    mlp:add(nn.Tanh())
    mlp:cuda()
    input3 = torch.randn(batchSize, inputSize):cuda()
@@ -804,5 +833,5 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax({'BlockSparse', 'BlockSparse_dense', 'BlockMixture', 'Sort'}) --, 'BlockSparse_benchmark'}) --'BlockSparse','Sort',
+nn.testcudax()
 

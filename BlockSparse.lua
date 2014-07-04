@@ -35,7 +35,7 @@ function BlockSparse:__init(nInputBlock, inputSize, nOutputBlock, outputSize, ac
    end
    
    -- sqrt(inputWindowSize*outputWindowSize) smaller than this use 
-   -- cublasSgemmBatched. If errors, set this to 100000
+   -- cublasSgemmBatched. 
    self.batchedGemmMax = 200
    
    -- for dense inputs or outputs
