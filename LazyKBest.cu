@@ -11,7 +11,7 @@ __global__ void cunnx_LazyKBest_updateOutput_kernel(
   const int k = blockIdx.x;
   
   float *output_k = output + k*outputSize;
-  float *indice_k = input + k*outputSize;
+  float *indice_k = indice + k*outputSize;
   const float *input_k = input + k*inputSize;
   
   float maxVal = -FLT_MAX;
@@ -63,7 +63,7 @@ static int cunnx_LazyKBest_updateOutput(lua_State *L)
 
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, indice->nDimension == 2, 3, "2D(batch mode) tensor expected");
-  luaL_argchekc(L, k <= KBEST_THREADS, 1, "k must be smaller than KBEST_THREADS");
+  luaL_argcheck(L, k <= LAZYKBEST_THREADS, 1, "k must be smaller than KBEST_THREADS");
   luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
   
   THCudaTensor_resize2d(output, input->size[0], k);
@@ -89,17 +89,16 @@ __global__ void cunnx_LazyKBest_updateGradInput_kernel(
   float *gradInput, const float *indice, const float *gradOutput, 
   int inputSize, int outputSize)
 {
-  __shared__ float buffer[LAZYKBEST_THREADS];
   int tx = threadIdx.x;
   int step = blockDim.x;
   int k = blockIdx.x;
   
   float *gradInput_k = gradInput + k*inputSize;
   const float *gradOutput_k = gradOutput + k*outputSize;
-  const float *indice_k = output + k*outputSize;
+  const float *indice_k = indice + k*outputSize;
   
   for (int i=tx; i<outputSize; i+=step)
-    gradInput_k[(int)(indice[i])] = gradOutput[i];
+    gradInput_k[(int)(indice_k[i])] = gradOutput_k[i];
 }
 
 
@@ -122,7 +121,7 @@ static int cunnx_LazyKBest_updateGradInput(lua_State *L)
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(LAZYKBEST_THREADS);
-  cunnx_LazyKBest_updateGradOutput_kernel<<<blocks,threads>>>(
+  cunnx_LazyKBest_updateGradInput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradInput), THCudaTensor_data(indice), 
     THCudaTensor_data(gradOutput), input->size[0], k
   );
