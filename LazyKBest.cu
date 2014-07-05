@@ -1,0 +1,100 @@
+#define KBEST_THREADS 32
+
+__global__ void cunnx_LazyKBest_updateOutput_kernel(
+  float *output, float *indice, const float *input, 
+  int inputSize, int outputSize)
+{
+  __shared__ float bufferVal[KBEST_THREADS];
+  __shared__ float bufferIdx[KBEST_THREADS];
+  const int tx = threadIdx.x;
+  const int step = blockDim.x;
+  const int k = blockIdx.x;
+  
+  float *output_k = output + k*outputSize;
+  float *indice_k = input + k*outputSize;
+  const float *input_k = input + k*inputSize;
+  
+  float maxVal = -FLT_MAX;
+  int maxIdx = -1;
+  
+  for (int i=tx; i<inputSize; i+=step)
+  {
+    float val = input_k[i];
+    if (val > maxVal)
+    {
+      maxVal = val;
+      maxIdx = i;
+    }
+  }
+  
+  bufferVal[tx] = maxVal;
+  bufferIdx[tx] = maxIdx;
+  
+  // reduce
+  for (unsigned int stride = blockDim.x >> 1; stride > outputSize-1; stride >>= 1)
+  {
+    __syncthreads();
+    if (tx < stride)
+    {
+      float val = bufferVal[tx+stride];
+      if (val > bufferVal[tx])
+      {
+        bufferVal[tx] = val;
+        bufferIdx[tx] = bufferIdx[tx+stride];
+      }
+    }
+  }
+  
+  if (tx < outputSize)
+  {
+    output_k[tx] = bufferVal[tx];
+    indice_k[tx] = bufferIdx[tx];
+  }
+}
+
+
+static int cunnx_LazyKBest_updateOutput(lua_State *L)
+{   
+  THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
+  
+  THCudaTensor *output = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "output", "torch.CudaTensor");
+  THCudaTensor *indice = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "indice", "torch.CudaTensor");
+  int k = luaT_getfieldcheckint(L, 1, "k");
+
+  luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
+  luaL_argcheck(L, indice->nDimension == 2, 3, "2D(batch mode) tensor expected");
+  luaL_argchekc(L, k <= KBEST_THREADS, 1, "k must be smaller than KBEST_THREADS");
+  luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
+  
+  THCudaTensor_resizeAs(output, k);
+  THCudaTensor_resizeAs(indice, k);
+ 
+  /* call cudakernel */
+  dim3 blocks(input->size[0]); // each cuda-block is an example
+  dim3 threads(BLOCKSPARSE_THREADS);
+  cunnx_LazyKBest_updateOutput_kernel<<<blocks,threads>>>(
+    THCudaTensor_data(output), THCudaTensor_data(indice), 
+    THCudaTensor_data(input), input->size[1], k
+  );
+  
+  cudaError errcode = cudaGetLastError();
+  if(errcode != cudaSuccess)
+    THError(cudaGetErrorString(errcode));
+
+  return 1;
+}
+ 
+ 
+  
+static const struct luaL_Reg cunnx_LazyKBest__ [] = {
+  {"LazyKBest_updateOutput", cunnx_LazyKBest_updateOutput},
+  {"LazyKBest_updateGradInput", cunnx_LazyKBest_updateGradInput},
+  {NULL, NULL}
+};
+
+static void cunnx_LazyKBest_init(lua_State *L)
+{
+  luaT_pushmetatable(L, "torch.CudaTensor");
+  luaT_registeratname(L, cunnx_LazyKBest__, "nn");
+  lua_pop(L,1);
+}
