@@ -18,6 +18,7 @@ printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __
 #include "WindowSparse.cu"
 #include "WindowGate.cu"
 #include "WindowGate2.cu"
+#include "LazyKBest.cu"
 
 
 LUA_EXTERNC DLL_EXPORT int luaopen_libcunnx(lua_State *L);
@@ -31,6 +32,7 @@ int luaopen_libcunnx(lua_State *L)
   cunnx_WindowSparse_init(L);
   cunnx_WindowGate_init(L);
   cunnx_WindowGate2_init(L);
+  cunnx_LazyKBest_init(L);
 
   return 1;
 }
