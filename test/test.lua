@@ -710,7 +710,25 @@ function cunnxtest.Sort()
    input = torch.randn(batchSize, nInput):cuda()
    output = s:forward(input)
    gradInput = s:backward(input, output)
-   mytester:assertTensorEq(gradInput:float(), input:float(), precision_forward, 'error on state (forward/backward double)')
+   mytester:assertTensorEq(gradInput:float(), input:float(), precision_forward, 'error on state (forward/backward cuda)')
+end
+
+function cunnxtest.LazyKBest()
+   local batchSize = 8
+   local nInput = 16
+   local nOutput = 4
+   local s = nn.LazyKBest(4)
+   s:cuda()
+   local input = torch.randn(batchSize, nInput):cuda()
+   local output = s:forward(input)
+   local gradInput = s:backward(input, output)
+   local gradInput2 = input:float():zero()
+   local indice = s._indice:type('torch.LongTensor')
+   for i=1,input:size(1) do
+      gradInput2:select(1, i):indexCopy(1, indice:select(1, i), output[2]:select(1, i):float())
+   end
+
+   mytester:assertTensorEq(gradInput:float(), gradInput2:float(), precision_forward, 'error on state (forward/backward)')
 end
 
 function cunnxtest.WindowGate()

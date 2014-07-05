@@ -2,7 +2,7 @@ local LazyKBest, parent = torch.class('nn.LazyKBest', 'nn.Module')
 ------------------------------------------------------------------------
 --[[ LazyKBest ]]--
 -- For example, divides the input into k sub-arrays and takes the 
--- max value of each. The max allowed value for k is 32.
+-- max value of each. Allowed value for k are, 1, 2, 4, 8, 16 and 32.
 -- Returns a table of the k-best {indices, inputs}
 -- Used with BlockSparse instead of nn.Sort
 ------------------------------------------------------------------------
@@ -28,11 +28,11 @@ end
 
 function LazyKBest:type(type)
    self.gradInput = self.gradInput:type(type)
-   if (type ~= 'torch.CudaTensor') then
-      self._output = self._output:type(type)
+   self._output = self._output:type(type)
+   if (type == 'torch.CudaTensor') then
       self._indice = self._indice:type(type)
-      self.output = {self._indice, self._output}
    end
+   self.output = {self._indice, self._output}
 end
 
 

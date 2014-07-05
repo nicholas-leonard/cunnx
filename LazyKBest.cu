@@ -48,7 +48,7 @@ __global__ void cunnx_LazyKBest_updateOutput_kernel(
   if (tx < outputSize)
   {
     output_k[tx] = bufferVal[tx];
-    indice_k[tx] = bufferIdx[tx];
+    indice_k[tx] = bufferIdx[tx] + 1;
   }
 }
 
@@ -62,7 +62,6 @@ static int cunnx_LazyKBest_updateOutput(lua_State *L)
   int k = luaT_getfieldcheckint(L, 1, "k");
 
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, indice->nDimension == 2, 3, "2D(batch mode) tensor expected");
   luaL_argcheck(L, k <= LAZYKBEST_THREADS, 1, "k must be smaller than KBEST_THREADS");
   luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
   
@@ -98,7 +97,7 @@ __global__ void cunnx_LazyKBest_updateGradInput_kernel(
   const float *indice_k = indice + k*outputSize;
   
   for (int i=tx; i<outputSize; i+=step)
-    gradInput_k[(int)(indice_k[i])] = gradOutput_k[i];
+    gradInput_k[(int)(indice_k[i] - 1)] = gradOutput_k[i];
 }
 
 
@@ -123,7 +122,7 @@ static int cunnx_LazyKBest_updateGradInput(lua_State *L)
   dim3 threads(LAZYKBEST_THREADS);
   cunnx_LazyKBest_updateGradInput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(gradInput), THCudaTensor_data(indice), 
-    THCudaTensor_data(gradOutput), input->size[0], k
+    THCudaTensor_data(gradOutput), input->size[1], k
   );
   
   cudaError errcode = cudaGetLastError();
