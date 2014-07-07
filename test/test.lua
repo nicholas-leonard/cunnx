@@ -101,6 +101,12 @@ function cunnxtest.SoftMaxTree()
    mytester:assertTensorEq(gradBiasCuda:float(), gradBias, precision_backward*10, 'error on state (accGradParameters gradBias) ')
    mytester:assertTensorEq(weightCuda:float(), weight, precision_backward, 'error on state (weight) ')
    mytester:assertTensorEq(biasCuda:float(), bias, precision_backward, 'error on state (bias) ')
+   
+   -- sharedClone
+   local smt3 = smt2:sharedClone()
+   output = smt2:forward{input, target}
+   output2 = smt3:forward{input, target}
+   mytester:assertTensorEq(output:float(), output2:float(), 0.00001)
 end
 
 function cunnxtest.BlockSparse()
