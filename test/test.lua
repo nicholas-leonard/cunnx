@@ -107,6 +107,25 @@ function cunnxtest.SoftMaxTree()
    output = smt2:forward{input, target}
    output2 = smt3:forward{input, target}
    mytester:assertTensorEq(output:float(), output2:float(), 0.00001)
+   
+   -- accUpdate
+   local smt3 = nn.SoftMaxTree(100, hierarchy, root_id, true)
+   smt3:cuda()
+   smt3:zeroGradParameters()
+   smt3.weight = smt2.weight:clone()
+   smt3.bias = smt2.bias:clone()
+   local output3 = smt3:forward{input, target}
+   local output = smt2:forward{input, target}
+   local gradInput3 = smt3:backwardUpdate({input, target}, grad, 0.1)
+   local gradInput = smt2:backwardUpdate({input, target}, grad, 0.1)
+   mytester:assertTensorEq(output3:float(), output:float(), 0.00001)
+   mytester:assertTensorEq(gradInput3:float(), gradInput:float(), 0.00001)
+   local parentId = 8
+   local weight3, bias3 = unpack(smt3:getNodeParameters(parentId))
+   local params = smt2:getNodeParameters(parentId)
+   local weight, bias = unpack(params)
+   mytester:assertTensorEq(weight3:float(), weight:float(), 0.00001)
+   mytester:assertTensorEq(bias3:float(), bias:float(), 0.00001)
 end
 
 function cunnxtest.BlockSparse()
