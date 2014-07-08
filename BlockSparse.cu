@@ -296,7 +296,7 @@ __global__ void cunnx_BlockSparse_updateGradOutput_kernel(
     }
     
     if (tx == 0)
-      gradOutputScale_k[m] = buffer[0]/outputScale;
+      gradOutputScale_k[m] = buffer[0]/(outputScale+0.00000001);
   }
 }
 
