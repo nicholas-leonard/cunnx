@@ -50,7 +50,7 @@ function cunnxtest.SoftMaxTree()
    smt._multiBuffer:zero()
    local groundtruthF = smt:forward{input, target}:clone()
    local logsoftOutput = smt._multiBuffer:clone()
-   local groundtruthB = smt:backward({input, target}, grad):clone()
+   local groundtruthB = smt:backward({input, target}, grad)[1]:clone()
    local linearOutput = smt._multiBuffer:clone()
    local gradWeight = smt.gradWeight:clone()
    local gradBias = smt.gradBias:clone()
@@ -75,7 +75,7 @@ function cunnxtest.SoftMaxTree()
    smt2._multiBuffer:zero()
    local rescudaF = smt2:forward{input, target}:clone()
    local logsoftOutputCuda = smt2._multiBuffer:clone():float()
-   local rescudaB = smt2:backward({input, target}, grad):clone()
+   local rescudaB = smt2:backward({input, target}, grad)[1]:clone()
    local linearOutputCuda = smt2._multiBuffer:clone():float()
    smt2._multiBuffer:zero()
    local gradWeightCuda = smt2.gradWeight:clone()
@@ -116,8 +116,8 @@ function cunnxtest.SoftMaxTree()
    smt3.bias = smt2.bias:clone()
    local output3 = smt3:forward{input, target}
    local output = smt2:forward{input, target}
-   local gradInput3 = smt3:backwardUpdate({input, target}, grad, 0.1)
-   local gradInput = smt2:backwardUpdate({input, target}, grad, 0.1)
+   local gradInput3 = smt3:backwardUpdate({input, target}, grad, 0.1)[1]
+   local gradInput = smt2:backwardUpdate({input, target}, grad, 0.1)[1]
    mytester:assertTensorEq(output3:float(), output:float(), 0.00001)
    mytester:assertTensorEq(gradInput3:float(), gradInput:float(), 0.00001)
    local parentId = 8
