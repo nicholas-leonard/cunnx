@@ -504,6 +504,9 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
     
   }
   
+  cublasDestroy(handle);
+  THCublasCheck();  
+  
   THCudaTensor_sum(gradInput, gradInputBatched, 1);
   THCudaTensor_resizeAs(gradInput, input); 
   
