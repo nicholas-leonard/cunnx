@@ -23,7 +23,7 @@ function NoisyReLU:__init(sparsityFactor, threshold_lr, alpha_range, std)
       
    -- larger alpha means putting more weights on contemporary value 
    -- when calculating the moving average mean
-   self.alpha_range = alpha_range or {0.5, 1000, 0.02}
+   self.alpha_range = alpha_range or {0.5, 1000, 0.1}
 
    assert(self.alpha_range[2] % 1 == 0 and self.alpha_range[2] > 0) -- is an int and > 0
    assert(self.alpha_range[1] >= self.alpha_range[3] and self.alpha_range[3] >= 0)
@@ -55,7 +55,11 @@ function NoisyReLU:updateOutput(input)
       self.output:resizeAs(input)
       self.noise:resizeAs(input)
       self.activated:resizeAs(input)
-      self.threshold:resize(1, input:size(2)):zero()
+      self.threshold:resize(1, input:size(2))
+      if not self._setup then
+         self.threshold:resize(1, input:size(2)):zero()
+         self._setup = true
+      end
       -- setting noise
       if self.std > 0 then
          self.noise:normal(0, self.std)
@@ -71,6 +75,7 @@ function NoisyReLU:updateOutput(input)
    -- check if a neuron is active
    self.activated:gt(self.output, self.threshold:expandAs(input))
    self.output:cmul(self.activated)
+   self.output:add(-1, self.threshold:expandAs(input))
 
    -- find the activeness of a neuron in each batch
    self.sparsity:mean(self.activated, 1)
@@ -100,7 +105,6 @@ function NoisyReLU:updateGradInput(input, gradOutput)
    
    -- update threshold, raise the threshold if the training 
    -- activeness is larger than the desired activeness
-   
    self.threshold_delta:copy(self.mean_sparsity)
    self.threshold_delta:add(-self.sparsityFactor)
    self.threshold:add(self.threshold_lr, self.threshold_delta)
