@@ -8,7 +8,6 @@ torch.include('cunnx', 'WindowSparse.lua')
 torch.include('cunnx', 'WindowGate.lua')
 torch.include('cunnx', 'WindowGate2.lua')
 torch.include('cunnx', 'WindowMixture.lua')
-torch.include('cunnx', 'ElementTable.lua')
 torch.include('cunnx', 'Balance.lua')
 torch.include('cunnx', 'LinearNoBias.lua')
 
