@@ -5,11 +5,13 @@ local BlockMixture, parent = torch.class('nn.BlockMixture', 'nn.Module')
 -- n - 1 output spaces, one for each of the hidden layers
 ------------------------------------------------------------------------
 
-function BlockMixture:__init(experts, gater)
+function BlockMixture:__init(experts, gater, expertScale, gaterScale)
    parent.__init(self)
    self.gater = gater
    assert(#experts > 1, "need at least 2 experts")
    self.experts = experts
+   self.expertScale = expertScale or 1
+   self.gaterScale = gaterScale or 1
    self.modules = {gater}
    for i, expert in ipairs(self.experts) do
       table.insert(self.modules, expert)
@@ -75,13 +77,13 @@ end
 function BlockMixture:accUpdateGradParameters(input, gradOutput, lr)
    self.experts[#self.experts]:accUpdateGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, lr)
    for i=#self.experts-1,1,-1 do
-      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], lr)
+      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], lr*self.expertScale)
    end
    
    if #self.experts == 2 then
-      self.gater:accUpdateGradParameters(input, self.gaterGradOutputs[1], lr)
+      self.gater:accUpdateGradParameters(input, self.gaterGradOutputs[1], lr*self.gaterScale)
    else
-      self.gater:accUpdateGradParameters(input, self.gaterGradOutputs, lr)
+      self.gater:accUpdateGradParameters(input, self.gaterGradOutputs, lr*self.gaterScale)
    end
 end
 
@@ -92,9 +94,10 @@ function BlockMixture:zeroGradParameters()
 end
 
 function BlockMixture:updateParameters(learningRate)
-   for i,module in ipairs(self.modules) do
-      module:updateParameters(learningRate)
+   for i,expert in ipairs(self.experts) do
+      expert:updateParameters(learningRate*self.expertScale)
    end
+   self.gater:updateParameters(learningRate*self.gaterScale)
 end
 
 function BlockMixture:share(mlp,...)
