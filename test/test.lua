@@ -851,7 +851,7 @@ function cunnxtest.Balance()
    local output = bl:forward(input)
    local p_y = output:sum(1):div(output:sum())
    mytester:assert(p_y:std() < 0.02)
-   mytester:assert(p_y:sum() == 1)
+   mytester:assert(math.abs(p_y:sum() - 1) < 0.000001)
    
    local gradInput = bl:backward(input, gradOutput)
 end
