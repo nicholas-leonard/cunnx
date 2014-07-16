@@ -60,15 +60,12 @@ function NoisyReLU:updateOutput(input)
          self.threshold:resize(1, input:size(2)):zero()
          self._setup = true
       end
-      -- setting noise
-      if self.std > 0 then
-         self.noise:normal(0, self.std)
-      end
       self.batchSize = input:size(1)
    end
   
    self.output:copy(input)
-   if self.train then
+   if self.train and self.std > 0 then
+      self.noise:normal(0, self.std)
       self.output:add(self.noise)
    end
      
