@@ -62,28 +62,36 @@ end
 
 function BlockMixture:accGradParameters(input, gradOutput, scale)
    scale = scale or 1
-   self.experts[#self.experts]:accGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, scale)
-   for i=#self.experts-1,1,-1 do
-      self.experts[i]:accGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], scale)
+   if self.expertScale > 0 then
+      self.experts[#self.experts]:accGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, scale)
+      for i=#self.experts-1,1,-1 do
+         self.experts[i]:accGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], scale)
+      end
    end
    
-   if #self.experts == 2 then
-      self.gater:accGradParameters(input, self.gaterGradOutputs[1], scale)
-   else
-      self.gater:accGradParameters(input, self.gaterGradOutputs, scale)
+   if self.gaterScale > 0 then
+      if #self.experts == 2 then
+         self.gater:accGradParameters(input, self.gaterGradOutputs[1], scale)
+      else
+         self.gater:accGradParameters(input, self.gaterGradOutputs, scale)
+      end
    end
 end
 
 function BlockMixture:accUpdateGradParameters(input, gradOutput, lr)
-   self.experts[#self.experts]:accUpdateGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, lr)
-   for i=#self.experts-1,1,-1 do
-      self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], lr*self.expertScale)
+   if self.expertScale > 0 then
+      self.experts[#self.experts]:accUpdateGradParameters(self.expertInputs[#self.expertInputs][1], gradOutput, lr)
+      for i=#self.experts-1,1,-1 do
+         self.experts[i]:accUpdateGradParameters(self.expertInputs[i], self.expertGradInputs[i+1][1], lr*self.expertScale)
+      end
    end
    
-   if #self.experts == 2 then
-      self.gater:accUpdateGradParameters(input, self.gaterGradOutputs[1], lr*self.gaterScale)
-   else
-      self.gater:accUpdateGradParameters(input, self.gaterGradOutputs, lr*self.gaterScale)
+   if self.gaterScale > 0 then
+      if #self.experts == 2 then
+         self.gater:accUpdateGradParameters(input, self.gaterGradOutputs[1], lr*self.gaterScale)
+      else
+         self.gater:accUpdateGradParameters(input, self.gaterGradOutputs, lr*self.gaterScale)
+      end
    end
 end
 
@@ -94,10 +102,14 @@ function BlockMixture:zeroGradParameters()
 end
 
 function BlockMixture:updateParameters(learningRate)
-   for i,expert in ipairs(self.experts) do
-      expert:updateParameters(learningRate*self.expertScale)
+   if self.expertScale > 0 then
+      for i,expert in ipairs(self.experts) do
+         expert:updateParameters(learningRate*self.expertScale)
+      end
    end
-   self.gater:updateParameters(learningRate*self.gaterScale)
+   if self.gaterScale > 0 then
+      self.gater:updateParameters(learningRate*self.gaterScale)
+   end
 end
 
 function BlockMixture:share(mlp,...)
