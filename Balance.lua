@@ -31,7 +31,6 @@ function Balance:updateOutput(input)
    end
    -- keep track of previous batches of P(Y|X)
    self.inputCache:narrow(1, self.startIdx, input:size(1)):copy(input)
-   self.inputCache:sum(1)
    
    -- P(X) is uniform for all X, i.e. P(X) = 1/c where c is a constant
    -- P(Y) = sum_x( P(Y|X)*P(X) )

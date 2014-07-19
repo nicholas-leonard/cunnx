@@ -870,5 +870,4 @@ function nn.testcudax(tests)
    end
 end
 
-nn.testcudax()
 
