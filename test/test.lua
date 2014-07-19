@@ -1,7 +1,3 @@
-require 'torch'
-require 'cunn'
-require 'nnx'
-require 'cunnx'
 
 local cunnxtest = {}
 local precision_forward = 1e-6
@@ -832,28 +828,19 @@ function cunnxtest.WindowGate()
    
 end
 
-function cunnxtest.Balance()
+function cunnxtest.MultinomialStatistics()
    local inputSize = 7 
    local batchSize = 3
-   local nBatch = 1
    
-   local input = torch.randn(batchSize, inputSize):mul(0.1):cuda()
-   for i=1,batchSize do
-      input[i]:add(blur(3, 1, inputSize):cuda())
-   end
-   local sm = nn.SoftMax()
-   sm:cuda()
-   input = sm:forward(input)
-   local gradOutput = torch.randn(batchSize, inputSize):cuda()
-   local bl = nn.Balance(nBatch)
-   bl:cuda()
+   local input = torch.randn(batchSize, inputSize)
+   local gradOutput = torch.randn(batchSize, inputSize)
    
+   local bl = nn.MultinomialStatistics(10)
    local output = bl:forward(input)
-   local p_y = output:sum(1):div(output:sum())
-   mytester:assert(p_y:std() < 0.02)
-   mytester:assert(math.abs(p_y:sum() - 1) < 0.000001)
-   
    local gradInput = bl:backward(input, gradOutput)
+   
+   mytester:assertTensorEq(input, output, 0.000001)
+   mytester:assertTensorEq(gradOutput, gradInput, 0.000001)
 end
 
 --cutorch.setDevice(2)
