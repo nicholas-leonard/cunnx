@@ -1,4 +1,3 @@
-
 local cunnxtest = {}
 local precision_forward = 1e-6
 local precision_backward = 1e-6
@@ -6,7 +5,7 @@ local nloop = 50
 local times = {}
 local cunntestx = {}
 
-torch.setdefaulttensortype('torch.FloatTensor')
+--e.g. usage: th -lcunnx -e "nn.testcudax{'SoftMaxTree','BlockSparse'}"
 
 local function round(a)
    if (a - math.floor(a)) >= 0.5 then
@@ -843,9 +842,9 @@ function cunnxtest.MultinomialStatistics()
    mytester:assertTensorEq(gradOutput, gradInput, 0.000001)
 end
 
---cutorch.setDevice(2)
-
 function nn.testcudax(tests)
+   local oldtype = torch.getdefaulttensortype()
+   torch.setdefaulttensortype('torch.FloatTensor')
    math.randomseed(os.time())
    jac = nn.Jacobian
    mytester = torch.Tester()
@@ -855,6 +854,7 @@ function nn.testcudax(tests)
    for module,tm in pairs(times) do
       print(module .. ': \t average speedup is ' .. (tm.cpu / (tm.gpu or 1e6)))
    end
+   torch.setdefaulttensortype(oldtype)
 end
 
 
