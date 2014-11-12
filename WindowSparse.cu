@@ -204,7 +204,6 @@ static int cunnx_WindowSparse_updateOutput(lua_State *L)
   }
   
   cublasDestroy(handle);
-  THCublasCheck();  
   
   THCudaTensor_free(input_);
   THCudaTensor_free(weight_);
@@ -369,7 +368,6 @@ static int cunnx_WindowSparse_updateGradInput(lua_State *L)
   }
   
   cublasDestroy(handle);
-  THCublasCheck();  
   
   THCudaTensor_free(gradInput_);
   THCudaTensor_free(weight_);
