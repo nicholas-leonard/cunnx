@@ -13,6 +13,7 @@ if ( !(expression)) { \
 printf( "Assert failed %d:%d at %s:%d\n", blockIdx.x, threadIdx.x,  __FILE__, __LINE__ ); \
 }
 
+#include "utils.c"
 #include "SoftMaxTree.cu"
 #include "BlockSparse.cu"
 #include "WindowSparse.cu"
