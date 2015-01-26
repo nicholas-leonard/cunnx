@@ -1,3 +1,4 @@
+#include "utils.h"
 #define WINDOWGATE2_THREADS 128
 
 __global__ void cunnx_WindowGate2_updateOutput_kernel(
@@ -75,6 +76,7 @@ __global__ void cunnx_WindowGate2_updateOutput_kernel(
   
 static int cunnx_WindowGate2_updateOutput(lua_State *L)
 { 
+  THCState *state = getCutorchState(L);
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   
   int inputSize = luaT_getfieldcheckint(L, 1, "inputSize");
@@ -96,26 +98,26 @@ static int cunnx_WindowGate2_updateOutput(lua_State *L)
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
   
-  THCudaTensor_resize2d(output, batchSize, outputWindowSize);
-  THCudaTensor_resize1d(outputIndiceCuda, batchSize);
+  THCudaTensor_resize2d(state, output, batchSize, outputWindowSize);
+  THCudaTensor_resize1d(state, outputIndiceCuda, batchSize);
   THLongTensor_resize1d(outputIndice, batchSize);
-  THCudaTensor_resize1d(inputIndiceCuda, batchSize);
-  THCudaTensor_resize1d(centroid, batchSize);
-  THCudaTensor_resize1d(normalizedCentroid, batchSize);
+  THCudaTensor_resize1d(state, inputIndiceCuda, batchSize);
+  THCudaTensor_resize1d(state, centroid, batchSize);
+  THCudaTensor_resize1d(state, normalizedCentroid, batchSize);
   
   
   /* call cudakernel */
   dim3 blocks(batchSize); // each cuda-block is an example
   dim3 threads(WINDOWGATE2_THREADS);
   cunnx_WindowGate2_updateOutput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(output), THCudaTensor_data(centroid),
-    THCudaTensor_data(normalizedCentroid), THCudaTensor_data(inputIndiceCuda),
-    THCudaTensor_data(outputIndiceCuda),
-    (const float*)THCudaTensor_data(input), (const float*)THCudaTensor_data(noise), 
+    THCudaTensor_data(state, output), THCudaTensor_data(state, centroid),
+    THCudaTensor_data(state, normalizedCentroid), THCudaTensor_data(state, inputIndiceCuda),
+    THCudaTensor_data(state, outputIndiceCuda),
+    (const float*)THCudaTensor_data(state, input), (const float*)THCudaTensor_data(state, noise), 
     inputSize, outputSize, inputWindowSize, outputWindowSize, windowStride, train
   );
   
-  THLongTensor_copyCuda(outputIndice, outputIndiceCuda);
+  THLongTensor_copyCuda(state, outputIndice, outputIndiceCuda);
   
   return 0;
 }
@@ -151,6 +153,7 @@ __global__ void cunnx_WindowGate2_updateGradInput_kernel(
   
 static int cunnx_WindowGate2_updateGradInput(lua_State *L)
 { 
+  THCState *state = getCutorchState(L);
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");
   THCudaTensor *gradOutput = (THCudaTensor*)luaT_checkudata(L, 3, "torch.CudaTensor"); 
   
@@ -177,23 +180,23 @@ static int cunnx_WindowGate2_updateGradInput(lua_State *L)
   luaL_argcheck(L, input->nDimension == 2, 2, "2D(batch mode) tensor expected");
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
   
-  THCudaTensor_resize2d(gradInput, batchSize, inputSize);
-  THCudaTensor_fill(gradInput, 0);
-  THCudaTensor_resize1d(error, batchSize);
-  THCudaTensor_resize1d(targetCentroid, batchSize);
+  THCudaTensor_resize2d(state, gradInput, batchSize, inputSize);
+  THCudaTensor_fill(state, gradInput, 0);
+  THCudaTensor_resize1d(state, error, batchSize);
+  THCudaTensor_resize1d(state, targetCentroid, batchSize);
     
   /* call cudakernel */
   dim3 blocks(batchSize); // each cuda-block is an example
   dim3 threads(WINDOWGATE2_THREADS);
   cunnx_WindowGate2_updateGradInput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(gradInput), THCudaTensor_data(error), 
-    THCudaTensor_data(targetCentroid), 
-    (const float*)THCudaTensor_data(centroid),
-    (const float*)THCudaTensor_data(input), 
-    (const float*)THCudaTensor_data(inputIndiceCuda),
-    (const float*)THCudaTensor_data(outputIndiceCuda),
-    (const float*)THCudaTensor_data(output), 
-    (const float*)THCudaTensor_data(gradOutput), 
+    THCudaTensor_data(state, gradInput), THCudaTensor_data(state, error), 
+    THCudaTensor_data(state, targetCentroid), 
+    (const float*)THCudaTensor_data(state, centroid),
+    (const float*)THCudaTensor_data(state, input), 
+    (const float*)THCudaTensor_data(state, inputIndiceCuda),
+    (const float*)THCudaTensor_data(state, outputIndiceCuda),
+    (const float*)THCudaTensor_data(state, output), 
+    (const float*)THCudaTensor_data(state, gradOutput), 
     inputSize, outputSize, inputWindowSize, outputWindowSize, 
     windowStride, c, d, e, lr
   );

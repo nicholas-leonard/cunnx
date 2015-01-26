@@ -1,3 +1,4 @@
+#include "utils.h"
 #define BLOCKSPARSE_THREADS 32
 #define BLOCKSPARSE_MAXOUTPUTBLOCKSIZE 512
 #define BLOCKSPARSE_STREAMS 8
@@ -38,6 +39,7 @@ __global__ void cunnx_BlockSparse_updateOutput_kernel(
 static int cunnx_BlockSparse_updateOutput(lua_State *L)
 { 
   /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput*/
+  THCState *state = getCutorchState(L);
   // batchSize x inputWindowSize x inputSize
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   // batchSize x inputWindowSize
@@ -88,23 +90,23 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
+  luaL_argcheck(L, THCudaTensor_isContiguous(state, input), 2, "Expecting contiguous input");
   
-  THCudaTensor_resize4d(outputBatched, batchSize, inputWindowSize, outputWindowSize, outputSize);
+  THCudaTensor_resize4d(state, outputBatched, batchSize, inputWindowSize, outputWindowSize, outputSize);
   THLongTensor_resize2d(inputIndiceHost, batchSize, inputWindowSize);
   THLongTensor_resize2d(outputIndiceHost, batchSize, outputWindowSize);
   
-  THLongTensor_copyCuda(inputIndiceHost, inputIndice);
-  THLongTensor_copyCuda(outputIndiceHost, outputIndice);
+  THLongTensor_copyCuda(state, inputIndiceHost, inputIndice);
+  THLongTensor_copyCuda(state, outputIndiceHost, outputIndice);
   
   stat = cublasCreate(&handle);
   if (stat != CUBLAS_STATUS_SUCCESS) 
     THError("CUBLAS initialization failed");
   
   if ( nOutputBlock > 1 )
-    THCudaTensor_resize3d(output, batchSize, outputWindowSize, outputSize);
+    THCudaTensor_resize3d(state, output, batchSize, outputWindowSize, outputSize);
   else
-    THCudaTensor_resize2d(output, batchSize, outputSize);
+    THCudaTensor_resize2d(state, output, batchSize, outputSize);
   
   /* streamed or batched */
   if (sqrt(inputSize*outputSize) > batchedGemmMax)
@@ -121,8 +123,8 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
     long batchedIdx = 0;
     for (int i=0; i<batchSize; i++)
     {
-      float *inputPtr = THCudaTensor_data(input)+i*input->stride[0];
-      float *outputPtr = THCudaTensor_data(outputBatched)+i*outputBatched->stride[0];
+      float *inputPtr = THCudaTensor_data(state, input)+i*input->stride[0];
+      float *outputPtr = THCudaTensor_data(state, outputBatched)+i*outputBatched->stride[0];
       long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
       long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
       
@@ -133,7 +135,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
           cublasSetStream(handle, streams[batchedIdx%BLOCKSPARSE_STREAMS]);
       
           stat = cublasSgemv(handle, CUBLAS_OP_T,  inputSize, outputSize,
-                            &alpha, (const float*)THCudaTensor_data(weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0], inputSize,
+                            &alpha, (const float*)THCudaTensor_data(state, weight)+(inputIdxPtr[l]-1)*weight->stride[1] + (outputIdxPtr[m]-1)*weight->stride[0], inputSize,
                             (const float*)inputPtr, 1,
                             &beta, outputPtr, 1);
                             
@@ -177,23 +179,23 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
     THCharTensor_resize1d(weightHost, nBatched*sizeof(float*));
     THCharTensor_resize1d(outputHost, nBatched*sizeof(float*));
     
-    THCudaTensor_resize1d(inputCuda, nBatched*sizeof(float*)/sizeof(float));
-    THCudaTensor_resize1d(weightCuda, nBatched*sizeof(float*)/sizeof(float));
-    THCudaTensor_resize1d(outputCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(state, inputCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(state, weightCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(state, outputCuda, nBatched*sizeof(float*)/sizeof(float));
     
     const float **inputB = (const float **)THCharTensor_data(inputHost);
     const float **weightB = (const float **)THCharTensor_data(weightHost);
     float **outputB = (float **)THCharTensor_data(outputHost);
     
-    const float **inputB_d = (const float **)THCudaTensor_data(inputCuda);
-    const float **weightB_d = (const float **)THCudaTensor_data(weightCuda);
-    float **outputB_d = (float **)THCudaTensor_data(outputCuda);
+    const float **inputB_d = (const float **)THCudaTensor_data(state, inputCuda);
+    const float **weightB_d = (const float **)THCudaTensor_data(state, weightCuda);
+    float **outputB_d = (float **)THCudaTensor_data(state, outputCuda);
     
     long batchedIdx = 0;
     for (int i=0; i<batchSize; i++)
     {
-      float *inputPtr = THCudaTensor_data(input)+i*input->stride[0];
-      float *outputPtr = THCudaTensor_data(outputBatched)+i*outputBatched->stride[0];
+      float *inputPtr = THCudaTensor_data(state, input)+i*input->stride[0];
+      float *outputPtr = THCudaTensor_data(state, outputBatched)+i*outputBatched->stride[0];
       long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
       long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
       
@@ -202,7 +204,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
         for (int m=0; m<outputWindowSize; m++)
         {
           inputB[batchedIdx] = inputPtr;
-          weightB[batchedIdx] = THCudaTensor_data(weight) + (outputIdxPtr[m]-1)*weight->stride[0] + (inputIdxPtr[l]-1)*weight->stride[1];
+          weightB[batchedIdx] = THCudaTensor_data(state, weight) + (outputIdxPtr[m]-1)*weight->stride[0] + (inputIdxPtr[l]-1)*weight->stride[1];
           outputB[batchedIdx] = outputPtr;
 
           outputPtr += outputBatched->stride[2];
@@ -236,9 +238,9 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateOutput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(output), THCudaTensor_data(outputBatched), 
-    THCudaTensor_data(outputIndice), THCudaTensor_data(outputScale),
-    THCudaTensor_data(bias),  outputSize, nOutputBlock,
+    THCudaTensor_data(state, output), THCudaTensor_data(state, outputBatched), 
+    THCudaTensor_data(state, outputIndice), THCudaTensor_data(state, outputScale),
+    THCudaTensor_data(state, bias),  outputSize, nOutputBlock,
     inputWindowSize, outputWindowSize
   );
   
@@ -303,6 +305,7 @@ __global__ void cunnx_BlockSparse_updateGradOutput_kernel(
 static int cunnx_BlockSparse_updateGradInput(lua_State *L)
 {   
   /* input, inputIndice, outputIndice, inputScale, outputScale*/
+  THCState *state = getCutorchState(L);
   // batchSize x inputWindowSize x inputSize
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   // batchSize x inputWindowSize
@@ -353,19 +356,19 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   luaL_argcheck(L, outputIndice->nDimension == 2, 4, "2D(batch mode) tensor expected");
   luaL_argcheck(L, inputScale->nDimension == 2, 5, "2D(batch mode) tensor expected");
   luaL_argcheck(L, outputScale->nDimension == 2, 6, "2D(batch mode) tensor expected");
-  luaL_argcheck(L, THCudaTensor_isContiguous(input), 2, "Expecting contiguous input");
+  luaL_argcheck(L, THCudaTensor_isContiguous(state, input), 2, "Expecting contiguous input");
   
-  THCudaTensor_resizeAs(_gradOutput, gradOutput);
-  THCudaTensor_resizeAs(gradOutputScale, outputScale);
-  THCudaTensor_resize4d(gradInputBatched, batchSize, outputWindowSize, inputWindowSize, inputSize);
+  THCudaTensor_resizeAs(state, _gradOutput, gradOutput);
+  THCudaTensor_resizeAs(state, gradOutputScale, outputScale);
+  THCudaTensor_resize4d(state, gradInputBatched, batchSize, outputWindowSize, inputWindowSize, inputSize);
  
   /* call cudakernel */
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateGradOutput_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(_gradOutput), THCudaTensor_data(gradOutputScale), 
-    THCudaTensor_data(gradOutput), THCudaTensor_data(output),
-    THCudaTensor_data(outputScale), outputWindowSize, outputSize
+    THCudaTensor_data(state, _gradOutput), THCudaTensor_data(state, gradOutputScale), 
+    THCudaTensor_data(state, gradOutput), THCudaTensor_data(state, output),
+    THCudaTensor_data(state, outputScale), outputWindowSize, outputSize
   );
   
   cudaError errcode = cudaGetLastError();
@@ -391,8 +394,8 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
     long batchedIdx = 0;
     for (int i=0; i<batchSize; i++)
     {
-      float *gradOutputPtr = THCudaTensor_data(_gradOutput)+i*_gradOutput->stride[0];
-      float *gradInputPtr = THCudaTensor_data(gradInputBatched)+i*gradInputBatched->stride[0];
+      float *gradOutputPtr = THCudaTensor_data(state, _gradOutput)+i*_gradOutput->stride[0];
+      float *gradInputPtr = THCudaTensor_data(state, gradInputBatched)+i*gradInputBatched->stride[0];
       long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
       long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
       
@@ -403,7 +406,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
           cublasSetStream(handle, streams[batchedIdx%BLOCKSPARSE_STREAMS]);
       
           stat = cublasSgemv(handle, CUBLAS_OP_N,  inputSize, outputSize,
-                            &alpha, (const float*)THCudaTensor_data(weight)+(outputIdxPtr[m]-1)*weight->stride[0]+(inputIdxPtr[l]-1)*weight->stride[1], inputSize,
+                            &alpha, (const float*)THCudaTensor_data(state, weight)+(outputIdxPtr[m]-1)*weight->stride[0]+(inputIdxPtr[l]-1)*weight->stride[1], inputSize,
                             (const float*)gradOutputPtr, 1,
                             &beta, gradInputPtr, 1);
                             
@@ -447,24 +450,24 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
     THCharTensor_resize1d(weightHost, nBatched*sizeof(float*));
     THCharTensor_resize1d(outputHost, nBatched*sizeof(float*));
     
-    THCudaTensor_resize1d(inputCuda, nBatched*sizeof(float*)/sizeof(float));
-    THCudaTensor_resize1d(weightCuda, nBatched*sizeof(float*)/sizeof(float));
-    THCudaTensor_resize1d(outputCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(state, inputCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(state, weightCuda, nBatched*sizeof(float*)/sizeof(float));
+    THCudaTensor_resize1d(state, outputCuda, nBatched*sizeof(float*)/sizeof(float));
     
     float **gradInputB = (float **)THCharTensor_data(inputHost);
     const float **weightB = (const float **)THCharTensor_data(weightHost);
     const float **gradOutputB = (const float **)THCharTensor_data(outputHost);
     
-    float **gradInputB_d = (float **)THCudaTensor_data(inputCuda);
-    const float **weightB_d = (const float **)THCudaTensor_data(weightCuda);
-    const float **gradOutputB_d = (const float **)THCudaTensor_data(outputCuda);
+    float **gradInputB_d = (float **)THCudaTensor_data(state, inputCuda);
+    const float **weightB_d = (const float **)THCudaTensor_data(state, weightCuda);
+    const float **gradOutputB_d = (const float **)THCudaTensor_data(state, outputCuda);
     
 
     long batchedIdx = 0;
     for (int i=0; i<batchSize; i++)
     {
-      float *gradOutputPtr = THCudaTensor_data(_gradOutput)+i*_gradOutput->stride[0];
-      float *gradInputPtr = THCudaTensor_data(gradInputBatched)+i*gradInputBatched->stride[0];
+      float *gradOutputPtr = THCudaTensor_data(state, _gradOutput)+i*_gradOutput->stride[0];
+      float *gradInputPtr = THCudaTensor_data(state, gradInputBatched)+i*gradInputBatched->stride[0];
       long *inputIdxPtr = THLongTensor_data(inputIndiceHost)+i*inputIndiceHost->stride[0];
       long *outputIdxPtr = THLongTensor_data(outputIndiceHost)+i*outputIndiceHost->stride[0];
       
@@ -473,7 +476,7 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
         for (int l=0; l<inputWindowSize; l++) 
         {
           gradInputB[batchedIdx] = gradInputPtr;
-          weightB[batchedIdx] = THCudaTensor_data(weight)+(outputIdxPtr[m]-1)*weight->stride[0]+(inputIdxPtr[l]-1)*weight->stride[1];
+          weightB[batchedIdx] = THCudaTensor_data(state, weight)+(outputIdxPtr[m]-1)*weight->stride[0]+(inputIdxPtr[l]-1)*weight->stride[1];
           gradOutputB[batchedIdx] = gradOutputPtr;
 
           gradInputPtr += gradInputBatched->stride[2];
@@ -505,8 +508,8 @@ static int cunnx_BlockSparse_updateGradInput(lua_State *L)
   
   cublasDestroy(handle);
   
-  THCudaTensor_sum(gradInput, gradInputBatched, 1);
-  THCudaTensor_resizeAs(gradInput, input); 
+  THCudaTensor_sum(state, gradInput, gradInputBatched, 1);
+  THCudaTensor_resizeAs(state, gradInput, input); 
   
   errcode = cudaGetLastError();
   if(errcode != cudaSuccess)
@@ -576,6 +579,7 @@ __global__ void cunnx_BlockSparse_accGradParameters_kernel(
 static int cunnx_BlockSparse_accGradParameters(lua_State *L)
 { 
   /* input, inputIndice, outputIndice, inputScale, outputScale, gradOutput, scale */
+  THCState *state = getCutorchState(L);
   // batchSize x inputWindowSize x inputSize
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   // batchSize x inputWindowSize
@@ -617,9 +621,9 @@ static int cunnx_BlockSparse_accGradParameters(lua_State *L)
   dim3 blocks(input->size[0]); // each cuda-block is an example
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_accGradParameters_kernel<<<blocks,threads>>>(
-    THCudaTensor_data(gradWeight), THCudaTensor_data(gradBias), 
-    THCudaTensor_data(_gradOutput), THCudaTensor_data(input),
-    THCudaTensor_data(inputIndice), THCudaTensor_data(outputIndice), 
+    THCudaTensor_data(state, gradWeight), THCudaTensor_data(state, gradBias), 
+    THCudaTensor_data(state, _gradOutput), THCudaTensor_data(state, input),
+    THCudaTensor_data(state, inputIndice), THCudaTensor_data(state, outputIndice), 
     inputSize, outputSize, nInputBlock, nOutputBlock, 
     inputIndice->size[1], outputIndice->size[1], scale
   );
