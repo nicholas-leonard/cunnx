@@ -27,10 +27,14 @@ SET(luasrc ${luasrc} test/test.lua)
 #ADD_TORCH_PACKAGE(cunnx "${src-cuda}" "${luasrc}" "Experiment cuda nn library")
 
 CUDA_ADD_LIBRARY(cunnx MODULE ${src-cuda})
+CUDA_ADD_CUBLAS_TO_TARGET(cunnx)
 TARGET_LINK_LIBRARIES(cunnx luaT THC TH)
 IF(APPLE)
   SET_TARGET_PROPERTIES(cunnx PROPERTIES
     LINK_FLAGS "-undefined dynamic_lookup")
+ENDIF()
+IF(LUALIB)
+  TARGET_LINK_LIBRARIES(cunnx ${LUALIB})
 ENDIF()
 
 ### Torch packages supposes libraries prefix is "lib"
