@@ -43,10 +43,10 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   // batchSize x inputWindowSize x inputSize
   THCudaTensor *input = (THCudaTensor*)luaT_checkudata(L, 2, "torch.CudaTensor");  
   // batchSize x inputWindowSize
-  THCudaTensor *inputIndice = (THCudaTensor*)luaT_checkudata(L, 3, "torch.CudaTensor");
+  THCudaLongTensor *inputIndice = (THCudaLongTensor*)luaT_checkudata(L, 3, "torch.CudaLongTensor");
   THCudaTensor *inputScale = (THCudaTensor*)luaT_checkudata(L, 5, "torch.CudaTensor");
   // batchSize x outputWindowSize
-  THCudaTensor *outputIndice = (THCudaTensor*)luaT_checkudata(L, 4, "torch.CudaTensor");
+  THCudaLongTensor *outputIndice = (THCudaLongTensor*)luaT_checkudata(L, 4, "torch.CudaLongTensor");
   THCudaTensor *outputScale = (THCudaTensor*)luaT_checkudata(L, 6, "torch.CudaTensor");
   
   int batchSize = luaT_getfieldcheckint(L, 1, "batchSize");
@@ -239,7 +239,7 @@ static int cunnx_BlockSparse_updateOutput(lua_State *L)
   dim3 threads(BLOCKSPARSE_THREADS);
   cunnx_BlockSparse_updateOutput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(state, output), THCudaTensor_data(state, outputBatched), 
-    THCudaTensor_data(state, outputIndice), THCudaTensor_data(state, outputScale),
+    (const float *)THCudaLongTensor_data(state, outputIndice), THCudaTensor_data(state, outputScale),
     THCudaTensor_data(state, bias),  outputSize, nOutputBlock,
     inputWindowSize, outputWindowSize
   );

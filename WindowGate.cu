@@ -81,7 +81,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   float a = (float)luaT_getfieldchecknumber(L, 1, "a");
   float b = (float)luaT_getfieldchecknumber(L, 1, "b");
   
-  THCudaTensor *outputIndiceCuda = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceCuda", "torch.CudaTensor");
+  THCudaLongTensor *outputIndiceCuda = (THCudaLongTensor*)luaT_getfieldcheckudata(L, 1, "outputIndiceCuda", "torch.CudaLongTensor");
   THLongTensor *outputIndice = (THLongTensor*)luaT_getfieldcheckudata(L, 1, "outputIndice", "torch.LongTensor");
   THCudaTensor *centroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "centroid", "torch.CudaTensor");
   THCudaTensor *normalizedCentroid = (THCudaTensor*)luaT_getfieldcheckudata(L, 1, "normalizedCentroid", "torch.CudaTensor");
@@ -92,7 +92,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   luaL_argcheck(L, input->size[1] == inputSize, 2, "invalid input size"); 
   
   THCudaTensor_resize2d(state, output, batchSize, outputWindowSize);
-  THCudaTensor_resize1d(state, outputIndiceCuda, batchSize);
+  THCudaLongTensor_resize1d(state, outputIndiceCuda, batchSize);
   THLongTensor_resize1d(outputIndice, batchSize);
   THCudaTensor_resize1d(state, centroid, batchSize);
   THCudaTensor_resize1d(state, normalizedCentroid, batchSize);
@@ -102,7 +102,7 @@ static int cunnx_WindowGate_updateOutput(lua_State *L)
   dim3 threads(WINDOWGATE_THREADS);
   cunnx_WindowGate_updateOutput_kernel<<<blocks,threads>>>(
     THCudaTensor_data(state, output), THCudaTensor_data(state, centroid),
-    THCudaTensor_data(state, normalizedCentroid), THCudaTensor_data(state, outputIndiceCuda),
+    THCudaTensor_data(state, normalizedCentroid), (float *)THCudaLongTensor_data(state, outputIndiceCuda),
     (const float*)THCudaTensor_data(state, input), (const float*)THCudaTensor_data(state, noise), 
     inputSize, outputSize, outputWindowSize, a, b, train
   );
