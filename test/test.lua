@@ -98,10 +98,12 @@ function cunnxtest.SoftMaxTree()
    mytester:assertTensorEq(biasCuda:float(), bias, precision_backward, 'error on state (bias) ')
    
    -- sharedClone
-   local smt3 = smt2:sharedClone()
-   output = smt2:forward{input, target}
-   output2 = smt3:forward{input, target}
-   mytester:assertTensorEq(output:float(), output2:float(), 0.00001)
+   if pcall(function() require "dpnn" end) then
+      local smt3 = smt2:sharedClone()
+      output = smt2:forward{input, target}
+      output2 = smt3:forward{input, target}
+      mytester:assertTensorEq(output:float(), output2:float(), 0.00001)
+   end
    
    -- accUpdate
    local smt3 = nn.SoftMaxTree(100, hierarchy, root_id, true)
