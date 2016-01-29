@@ -125,6 +125,50 @@ function cunnxtest.SoftMaxTree()
    mytester:assertTensorEq(bias3:float(), bias:float(), 0.00001)
 end
 
+function cunnxtest.SoftMaxTree_issue24()
+   local input = torch.randn(120,100):float()
+   local targs = torch.IntTensor{3,4,5,6,7,8}
+   local target = targs:index(1,torch.rand(120):mul(targs:size(1)):ceil():long())
+   local root_id = 1
+   local hierarchy={
+       [1]=torch.IntTensor{2,7},
+       [2]=torch.IntTensor{8,6,5,4,3},
+       [7]=torch.IntTensor{9,10,11}
+   }
+   local smt = nn.SoftMaxTree(100,hierarchy,root_id):float()
+   local tll = nn.TreeNLLCriterion():float()
+
+   local inputGPU = input:cuda()
+   local targetGPU = target:cuda()
+   local smtGPU = smt:clone():cuda()
+   local tllGPU = tll:clone():cuda()
+
+   -- float
+   smt:zeroGradParameters()
+   local output = smt:forward{input,target}
+   local err = tll:forward(output,target)
+   local gradOutput = tll:backward(output,target)
+   smt:backward({input,target},gradOutput)
+   
+   local gradWeightCPU = smt.gradWeight:clone()
+   local gradInputCPU = smt.gradInput[1]:clone()
+
+   -- cuda
+   smtGPU:zeroGradParameters()
+   local outputGPU = smtGPU:forward{inputGPU,targetGPU}
+   local errGPU = tllGPU:forward(outputGPU,targetGPU)
+   local gradOutputGPU = tllGPU:backward(outputGPU,targetGPU)
+   smtGPU:backward({inputGPU,targetGPU},gradOutputGPU) -- note that gradOutputGPU is not contiguous
+   
+   local gradWeightGPU = smtGPU.gradWeight:clone():float()
+   local gradInputGPU = smtGPU.gradInput[1]:clone():float()
+   
+   mytester:assert(math.abs(err - errGPU) < 0.000001, "SMT err error")
+   mytester:assertTensorEq(gradOutput, gradOutputGPU:float(), 0.0000001, "SMT gradOutput error")
+   mytester:assertTensorEq(gradWeightCPU, gradWeightGPU, 0.0000001, "SMT gradWeight error")
+   mytester:assertTensorEq(gradInputCPU, gradInputGPU, 0.0000001, "SMT gradInput error")
+end
+
 function cunnxtest.BlockSparse()
    local nInputBlock = 128
    local nOutputBlock = 128
