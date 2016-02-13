@@ -4,18 +4,18 @@ require "cunn"
 require "nnx"
 require "libcunnx"
 
-torch.include('cunnx', 'WindowSparse.lua')
-torch.include('cunnx', 'WindowGate.lua')
-torch.include('cunnx', 'WindowGate2.lua')
-torch.include('cunnx', 'WindowMixture.lua')
---torch.include('cunnx', 'LinearNoBias.lua')
-torch.include('cunnx', 'MultinomialStatistics.lua')
+require('cunnx.WindowSparse')
+require('cunnx.WindowGate')
+require('cunnx.WindowGate2')
+require('cunnx.WindowMixture')
+--require('cunnx.LinearNoBias')
+require('cunnx.MultinomialStatistics')
 
-torch.include('cunnx', 'BlockSparse.lua')
-torch.include('cunnx', 'BlockMixture.lua')
-torch.include('cunnx', 'Sort.lua')
-torch.include('cunnx', 'LazyKBest.lua')
-torch.include('cunnx', 'NoisyReLU.lua')
-torch.include('cunnx', 'TypeDecorator.lua')
+require('cunnx.BlockSparse')
+require('cunnx.BlockMixture')
+require('cunnx.Sort')
+require('cunnx.LazyKBest')
+require('cunnx.NoisyReLU')
+require('cunnx.TypeDecorator')
 
-torch.include('cunnx', 'test.lua')
+require('cunnx.test')
