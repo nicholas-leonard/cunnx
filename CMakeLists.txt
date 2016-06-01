@@ -15,8 +15,8 @@ ENDIF()
 FIND_PACKAGE(CUDA 6.5 REQUIRED)
 
 # Detect CUDA architecture and get best NVCC flags
-IF(DEFINED CUDA_HAS_FP16)
-  # New CMake macro, comes with FindCUDA
+IF(COMMAND CUDA_SELECT_NVCC_ARCH_FLAGS)
+  # New CMake function, comes with FindCUDA
   CUDA_SELECT_NVCC_ARCH_FLAGS(NVCC_FLAGS_EXTRA $ENV{TORCH_CUDA_ARCH_LIST})
 ELSE()
   # Old way of getting the flags, with extra include file
